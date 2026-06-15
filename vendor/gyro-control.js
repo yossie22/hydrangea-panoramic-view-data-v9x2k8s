@@ -1,13 +1,17 @@
 /**
- * パノラマ用ジャイロ制御（look.html / viewer.html 共通）
- * v5: ゆっくり追従・指ドラッグと分離・固まりにくい
+ * パノラマ用ジャイロ制御 v6
+ * 上下: beta（安定） / 左右: alpha ゆっくり追従 + 跳ね時は gamma 補助
  */
 (function(global) {
   'use strict';
 
-  var GYRO_SMOOTH = 0.11;
-  var GYRO_MAX_STEP = 0.028;
-  var ALPHA_SPIKE_DEG = 72;
+  var PITCH_SMOOTH = 0.17;
+  var YAW_SMOOTH = 0.12;
+  var PITCH_MAX_STEP = 0.032;
+  var YAW_MAX_STEP = 0.022;
+  var ALPHA_SPIKE_DEG = 68;
+  var SENSOR_LP = 0.22;
+  var YAW_OFF_MAX_DELTA = 0.028;
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -19,36 +23,65 @@
   function angleDelta(from, to) {
     return normalizeAngle(to - from);
   }
-  function smoothStep(current, target, smooth, maxStep) {
-    var d = target - current;
-    var step = smooth * d;
-    if (maxStep > 0) step = clamp(step, -maxStep, maxStep);
-    return current + step;
+  function lp(prev, next, k) {
+    return prev == null ? next : prev + k * (next - prev);
+  }
+  function screenOrientationAngle() {
+    if (global.screen && global.screen.orientation && global.screen.orientation.angle != null) {
+      return global.screen.orientation.angle;
+    }
+    return global.orientation || 0;
+  }
+  function yawOffFromGamma(initGamma, gamma, initBeta, beta) {
+    var orient = screenOrientationAngle();
+    if (orient === 90 || orient === -90 || orient === 270) {
+      return degToRad(beta - initBeta);
+    }
+    return degToRad(gamma - initGamma);
   }
 
   function trackOrientation(e, state) {
     if (e.beta == null) return null;
     if (state.initBeta == null) {
       state.initBeta = e.beta;
-      state.initUnwrappedAlpha = e.alpha != null ? e.alpha : 0;
+      state.initGamma = e.gamma != null ? e.gamma : 0;
+      state.fBeta = e.beta;
+      state.fGamma = e.gamma != null ? e.gamma : 0;
       state.prevAlpha = e.alpha;
       state.unwrappedAlpha = e.alpha != null ? e.alpha : 0;
+      state.initUnwrappedAlpha = state.unwrappedAlpha;
       state.yawOff = 0;
       return { ready: false };
     }
 
-    var pitchOff = degToRad(state.initBeta - e.beta);
+    state.fBeta = lp(state.fBeta, e.beta, SENSOR_LP);
+    if (e.gamma != null) state.fGamma = lp(state.fGamma, e.gamma, SENSOR_LP);
+    var pitchOff = degToRad(state.initBeta - state.fBeta);
 
+    var yawOffAlpha = state.yawOff;
+    var alphaBad = false;
     if (e.alpha != null && state.prevAlpha != null) {
       var alphaStep = e.alpha - state.prevAlpha;
       if (alphaStep > 180) alphaStep -= 360;
       if (alphaStep < -180) alphaStep += 360;
-      if (Math.abs(alphaStep) <= ALPHA_SPIKE_DEG) {
+      if (Math.abs(alphaStep) > ALPHA_SPIKE_DEG || Math.abs(e.beta - 90) < 12) {
+        alphaBad = true;
+      } else {
         state.unwrappedAlpha += alphaStep;
         state.prevAlpha = e.alpha;
+        yawOffAlpha = degToRad(state.initUnwrappedAlpha - state.unwrappedAlpha);
       }
-      state.yawOff = degToRad(state.initUnwrappedAlpha - state.unwrappedAlpha);
+    } else {
+      alphaBad = true;
     }
+
+    var yawOff = alphaBad
+      ? yawOffFromGamma(state.initGamma, state.fGamma, state.initBeta, state.fBeta)
+      : yawOffAlpha;
+
+    var dy = yawOff - state.yawOff;
+    dy = clamp(dy, -YAW_OFF_MAX_DELTA, YAW_OFF_MAX_DELTA);
+    state.yawOff += dy;
 
     return { ready: true, yawOff: state.yawOff, pitchOff: pitchOff };
   }
@@ -113,9 +146,12 @@
     var displayPitch = view.pitch();
     var orientState = {
       initBeta: null,
-      initUnwrappedAlpha: 0,
+      initGamma: 0,
+      fBeta: null,
+      fGamma: null,
       prevAlpha: null,
       unwrappedAlpha: 0,
+      initUnwrappedAlpha: 0,
       yawOff: 0
     };
 
@@ -125,22 +161,18 @@
     function tick() {
       if (!self.enabled) return;
       self.raf = global.requestAnimationFrame(tick);
+      if (self.hooks.onTick) self.hooks.onTick();
       var v = self.getView();
       if (!v || !self.latestEvent) return;
       var o = trackOrientation(self.latestEvent, orientState);
-      if (!o) return;
-      if (!o.ready) {
-        displayYaw = self.base.viewYaw;
-        displayPitch = self.base.viewPitch;
-        return;
-      }
+      if (!o || !o.ready) return;
       var targetYaw = self.base.viewYaw + o.yawOff;
       var targetPitch = clamp(self.base.viewPitch + o.pitchOff, -Math.PI / 2, Math.PI / 2);
       displayYaw = normalizeAngle(
-        displayYaw + clamp(GYRO_SMOOTH * angleDelta(displayYaw, targetYaw), -GYRO_MAX_STEP, GYRO_MAX_STEP)
+        displayYaw + clamp(YAW_SMOOTH * angleDelta(displayYaw, targetYaw), -YAW_MAX_STEP, YAW_MAX_STEP)
       );
       displayPitch = clamp(
-        smoothStep(displayPitch, targetPitch, GYRO_SMOOTH, GYRO_MAX_STEP),
+        displayPitch + clamp(PITCH_SMOOTH * (targetPitch - displayPitch), -PITCH_MAX_STEP, PITCH_MAX_STEP),
         -Math.PI / 2,
         Math.PI / 2
       );
