@@ -123,7 +123,12 @@ function goToScene(pin) {
   if (SIDE_BRANCHES.length > 0) {
     url += '&sideBranches=' + encodeURIComponent(JSON.stringify(SIDE_BRANCHES));
   }
-  url += '&back=./map.html';
+  url += '&back=' + encodeURIComponent('map.html');
+  window.location.href = url;
+}
+
+function goToLook(pin) {
+  var url = './look.html?id=' + pin.sceneId + '&back=' + encodeURIComponent('map.html');
   window.location.href = url;
 }
 
@@ -138,7 +143,34 @@ function renderPins() {
     el.style.top = item.pos.y + '%';
     el.setAttribute('data-idx', i);
     el.innerHTML = '<div class="pin-label">' + item.pin.name + '</div><div class="pin-icon" style="background:' + item.pin.color + ';"><span class="pin-number">' + (i+1) + '</span></div>';
-    el.addEventListener('click', function() { goToScene(PINS[parseInt(this.getAttribute('data-idx'))]); });
+    (function(idx) {
+      var pressTimer = null;
+      el.addEventListener('click', function() {
+        if (el.__lookLongPress) {
+          el.__lookLongPress = false;
+          return;
+        }
+        goToScene(PINS[idx]);
+      });
+      el.addEventListener('touchstart', function() {
+        clearTimeout(pressTimer);
+        pressTimer = setTimeout(function() {
+          el.__lookLongPress = true;
+          goToLook(PINS[idx]);
+        }, 700);
+      }, { passive: true });
+      el.addEventListener('touchend', function() { clearTimeout(pressTimer); });
+      el.addEventListener('touchmove', function() { clearTimeout(pressTimer); });
+      el.addEventListener('mousedown', function() {
+        if (!('ontouchstart' in window)) return;
+        clearTimeout(pressTimer);
+        pressTimer = setTimeout(function() {
+          el.__lookLongPress = true;
+          goToLook(PINS[idx]);
+        }, 700);
+      });
+      el.addEventListener('mouseup', function() { clearTimeout(pressTimer); });
+    })(i);
     overlay.appendChild(el);
   });
 }
