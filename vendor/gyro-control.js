@@ -1,16 +1,18 @@
 /**
- * パノラマ用ジャイロ制御 v10
- * 上下: beta（v9 まで通り・変更なし）
- * 左右: alpha 累積（v4 系）＋符号反転（逆向きだったため）
+ * パノラマ用ジャイロ制御 v11
+ * 上下: beta + 平滑化（v7〜10 共通・変更なし）
+ * 左右: v7 の alpha アンラップ（init 基準）＋小さな揺れ除去
  */
 (function(global) {
   'use strict';
 
   var PITCH_SMOOTH = 0.17;
-  var YAW_SMOOTH = 0.30;
+  var YAW_SMOOTH = 0.14;
   var PITCH_MAX_STEP = 0.032;
-  var YAW_MAX_STEP = 0.050;
-  var ALPHA_SPIKE_DEG = 72;
+  var YAW_MAX_STEP = 0.022;
+  var ALPHA_SPIKE_DEG = 55;
+  var ALPHA_DEADZONE_DEG = 0.4;
+  var YAW_JUMP_GUARD_RAD = 0.55;
   var SENSOR_LP = 0.22;
 
   function degToRad(d) { return d * Math.PI / 180; }
@@ -28,33 +30,29 @@
   }
 
   function trackOrientation(e, state) {
-    if (e.beta == null) return null;
-
+    if (e.beta == null || e.alpha == null) return null;
     if (state.initBeta == null) {
       state.initBeta = e.beta;
       state.fBeta = e.beta;
       state.prevAlpha = e.alpha;
-      state.unwrappedAlpha = 0;
-      state.yawOff = 0;
+      state.unwrappedAlpha = e.alpha;
+      state.initUnwrappedAlpha = e.alpha;
       return { ready: false };
     }
 
     state.fBeta = lp(state.fBeta, e.beta, SENSOR_LP);
     var pitchOff = degToRad(state.initBeta - state.fBeta);
 
-    if (e.alpha != null && state.prevAlpha != null) {
-      var alphaStep = e.alpha - state.prevAlpha;
-      if (alphaStep > 180) alphaStep -= 360;
-      if (alphaStep < -180) alphaStep += 360;
-      if (Math.abs(alphaStep) <= ALPHA_SPIKE_DEG) {
-        state.unwrappedAlpha += alphaStep;
-        state.prevAlpha = e.alpha;
-      }
+    var alphaStep = e.alpha - state.prevAlpha;
+    if (alphaStep > 180) alphaStep -= 360;
+    if (alphaStep < -180) alphaStep += 360;
+    if (Math.abs(alphaStep) <= ALPHA_SPIKE_DEG && Math.abs(alphaStep) >= ALPHA_DEADZONE_DEG) {
+      state.unwrappedAlpha += alphaStep;
+      state.prevAlpha = e.alpha;
     }
 
-    state.yawOff = normalizeAngle(degToRad(state.unwrappedAlpha));
-
-    return { ready: true, yawOff: state.yawOff, pitchOff: pitchOff };
+    var yawOff = degToRad(state.initUnwrappedAlpha - state.unwrappedAlpha);
+    return { ready: true, yawOff: yawOff, pitchOff: pitchOff };
   }
 
   function GyroControl(getView) {
@@ -115,12 +113,13 @@
     var self = this;
     var displayYaw = view.yaw();
     var displayPitch = view.pitch();
+    var lastTargetYaw = null;
     var orientState = {
       initBeta: null,
       fBeta: null,
       prevAlpha: null,
       unwrappedAlpha: 0,
-      yawOff: 0
+      initUnwrappedAlpha: 0
     };
 
     this.handler = function(e) { self.latestEvent = e; };
@@ -136,6 +135,11 @@
       if (!o || !o.ready) return;
       var targetYaw = self.base.viewYaw + o.yawOff;
       var targetPitch = clamp(self.base.viewPitch + o.pitchOff, -Math.PI / 2, Math.PI / 2);
+      if (lastTargetYaw != null &&
+          Math.abs(angleDelta(lastTargetYaw, targetYaw)) > YAW_JUMP_GUARD_RAD) {
+        return;
+      }
+      lastTargetYaw = targetYaw;
       displayYaw = normalizeAngle(
         displayYaw + clamp(YAW_SMOOTH * angleDelta(displayYaw, targetYaw), -YAW_MAX_STEP, YAW_MAX_STEP)
       );
