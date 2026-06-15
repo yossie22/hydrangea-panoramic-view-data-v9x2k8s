@@ -1834,6 +1834,14 @@ var sceneGyro = null;
 
 if (typeof GyroControl !== 'undefined' && GyroControl.isSupportedDevice() && gyroBtnEl) {
   sceneGyro = new GyroControl(function() { return currentView; });
+  sceneGyro.setHooks({
+    onStart: function() {
+      try { viewer.controls().disable(); } catch (e0) {}
+    },
+    onStop: function() {
+      try { viewer.controls().enable(); } catch (e1) {}
+    }
+  });
   sceneGyro.setOnChange(function(on) {
     gyroBtnEl.classList.toggle('is-on', on);
     gyroBtnEl.setAttribute('aria-pressed', on ? 'true' : 'false');

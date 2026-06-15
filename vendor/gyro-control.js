@@ -1,11 +1,13 @@
 /**
  * パノラマ用ジャイロ制御（look.html / viewer.html 共通）
- * v4: alpha アンラップ + 急回転ガード
+ * v5: ゆっくり追従・指ドラッグと分離・固まりにくい
  */
 (function(global) {
   'use strict';
 
-  var GYRO_SMOOTH = 0.24;
+  var GYRO_SMOOTH = 0.11;
+  var GYRO_MAX_STEP = 0.028;
+  var ALPHA_SPIKE_DEG = 72;
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -17,27 +19,38 @@
   function angleDelta(from, to) {
     return normalizeAngle(to - from);
   }
+  function smoothStep(current, target, smooth, maxStep) {
+    var d = target - current;
+    var step = smooth * d;
+    if (maxStep > 0) step = clamp(step, -maxStep, maxStep);
+    return current + step;
+  }
 
   function trackOrientation(e, state) {
-    if (e.alpha == null || e.beta == null) return null;
-    if (state.prevAlpha == null) {
-      state.prevAlpha = e.alpha;
-      state.unwrappedAlpha = e.alpha;
-      state.initUnwrappedAlpha = e.alpha;
+    if (e.beta == null) return null;
+    if (state.initBeta == null) {
       state.initBeta = e.beta;
+      state.initUnwrappedAlpha = e.alpha != null ? e.alpha : 0;
+      state.prevAlpha = e.alpha;
+      state.unwrappedAlpha = e.alpha != null ? e.alpha : 0;
+      state.yawOff = 0;
       return { ready: false };
     }
-    var alphaStep = e.alpha - state.prevAlpha;
-    if (alphaStep > 180) alphaStep -= 360;
-    if (alphaStep < -180) alphaStep += 360;
-    if (Math.abs(alphaStep) > 55) return null;
-    state.unwrappedAlpha += alphaStep;
-    state.prevAlpha = e.alpha;
-    return {
-      ready: true,
-      yawOff: degToRad(state.initUnwrappedAlpha - state.unwrappedAlpha),
-      pitchOff: degToRad(state.initBeta - e.beta)
-    };
+
+    var pitchOff = degToRad(state.initBeta - e.beta);
+
+    if (e.alpha != null && state.prevAlpha != null) {
+      var alphaStep = e.alpha - state.prevAlpha;
+      if (alphaStep > 180) alphaStep -= 360;
+      if (alphaStep < -180) alphaStep += 360;
+      if (Math.abs(alphaStep) <= ALPHA_SPIKE_DEG) {
+        state.unwrappedAlpha += alphaStep;
+        state.prevAlpha = e.alpha;
+      }
+      state.yawOff = degToRad(state.initUnwrappedAlpha - state.unwrappedAlpha);
+    }
+
+    return { ready: true, yawOff: state.yawOff, pitchOff: pitchOff };
   }
 
   function GyroControl(getView) {
@@ -48,17 +61,22 @@
     this.latestEvent = null;
     this.base = null;
     this.onChange = null;
+    this.hooks = {};
   }
 
   GyroControl.prototype.setOnChange = function(fn) {
     this.onChange = fn;
   };
 
+  GyroControl.prototype.setHooks = function(hooks) {
+    this.hooks = hooks || {};
+  };
+
   GyroControl.prototype._emit = function() {
     if (this.onChange) this.onChange(this.enabled);
   };
 
-  GyroControl.prototype.stop = function() {
+  GyroControl.prototype._cleanupListeners = function() {
     if (this.handler) {
       global.removeEventListener('deviceorientation', this.handler, true);
       this.handler = null;
@@ -68,9 +86,15 @@
       this.raf = null;
     }
     this.latestEvent = null;
+  };
+
+  GyroControl.prototype.stop = function() {
+    var wasOn = this.enabled;
+    this._cleanupListeners();
     this.base = null;
-    if (this.enabled) {
-      this.enabled = false;
+    this.enabled = false;
+    if (wasOn) {
+      if (this.hooks.onStop) this.hooks.onStop();
       this._emit();
     }
   };
@@ -78,21 +102,22 @@
   GyroControl.prototype.start = function() {
     var view = this.getView();
     if (!view) return false;
-    this.stop();
+    var wasOn = this.enabled;
+    this._cleanupListeners();
     this.enabled = true;
     this.base = { viewYaw: view.yaw(), viewPitch: view.pitch() };
-    this.latestEvent = null;
+    if (!wasOn && this.hooks.onStart) this.hooks.onStart();
+
     var self = this;
     var displayYaw = view.yaw();
     var displayPitch = view.pitch();
     var orientState = {
+      initBeta: null,
+      initUnwrappedAlpha: 0,
       prevAlpha: null,
       unwrappedAlpha: 0,
-      initUnwrappedAlpha: 0,
-      initBeta: 0
+      yawOff: 0
     };
-    var lastTargetYaw = null;
-    var lastTargetPitch = null;
 
     this.handler = function(e) { self.latestEvent = e; };
     global.addEventListener('deviceorientation', this.handler, true);
@@ -107,21 +132,18 @@
       if (!o.ready) {
         displayYaw = self.base.viewYaw;
         displayPitch = self.base.viewPitch;
-        lastTargetYaw = displayYaw;
-        lastTargetPitch = displayPitch;
         return;
       }
       var targetYaw = self.base.viewYaw + o.yawOff;
       var targetPitch = clamp(self.base.viewPitch + o.pitchOff, -Math.PI / 2, Math.PI / 2);
-      if (lastTargetYaw != null) {
-        if (Math.abs(angleDelta(lastTargetYaw, targetYaw)) > 0.9) return;
-        if (Math.abs(targetPitch - lastTargetPitch) > 0.9) return;
-      }
-      lastTargetYaw = targetYaw;
-      lastTargetPitch = targetPitch;
-      displayYaw = normalizeAngle(displayYaw + GYRO_SMOOTH * angleDelta(displayYaw, targetYaw));
-      displayPitch = displayPitch + GYRO_SMOOTH * (targetPitch - displayPitch);
-      displayPitch = clamp(displayPitch, -Math.PI / 2, Math.PI / 2);
+      displayYaw = normalizeAngle(
+        displayYaw + clamp(GYRO_SMOOTH * angleDelta(displayYaw, targetYaw), -GYRO_MAX_STEP, GYRO_MAX_STEP)
+      );
+      displayPitch = clamp(
+        smoothStep(displayPitch, targetPitch, GYRO_SMOOTH, GYRO_MAX_STEP),
+        -Math.PI / 2,
+        Math.PI / 2
+      );
       v.setYaw(displayYaw);
       v.setPitch(displayPitch);
     }
