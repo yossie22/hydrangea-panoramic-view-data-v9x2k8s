@@ -1,8 +1,9 @@
 /**
- * パノラマ用ジャイロ制御 v24
+ * パノラマ用ジャイロ制御 v25
  * 縦画面: v13 そのまま
- * 横画面: 左右=コンパス、上下=クォータニオン+画面向き補正（CTPanoramaView 方式）
- * 詳細: vendor/gyro-STABLE-v24.txt
+ * 横画面: 左右=コンパス、上下=クォータニオン+画面向き補正
+ * v25: iPhone 上下符号修正、iPad 画面補正入替、左右回転を上下から分離
+ * 詳細: vendor/gyro-STABLE-v25.txt
  */
 (function(global) {
   'use strict';
@@ -21,7 +22,8 @@
   var LANDSCAPE_YAW_IGNORE_PITCH = 0.45;
   var LANDSCAPE_CALIB_FRAMES = 8;
   var LANDSCAPE_PITCH_SIGN = 1;
-  var BUILD = 'v24';
+  var LANDSCAPE_QUAT_LP = 0.18;
+  var BUILD = 'v25';
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -49,8 +51,14 @@
     return false;
   }
 
+  function isIPadDevice() {
+    var ua = navigator.userAgent || '';
+    if (/iPad/.test(ua)) return true;
+    return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+  }
+
   function landscapePitchSign() {
-    return isIPhoneDevice() ? -LANDSCAPE_PITCH_SIGN : LANDSCAPE_PITCH_SIGN;
+    return LANDSCAPE_PITCH_SIGN;
   }
 
   function getScreenAngleDeg() {
@@ -118,18 +126,27 @@
     });
   }
 
-  /** CTPanoramaView と同じ画面向き補正（横画面用） */
+  function landscapeFixLandscapeRight() {
+    var cq1 = qFromAxisAngle(0, 1, 0, Math.PI / 2);
+    var cq2 = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
+    return qMul(cq2, cq1);
+  }
+
+  function landscapeFixLandscapeLeft() {
+    var cq1 = qFromAxisAngle(0, 1, 0, -Math.PI / 2);
+    var cq2 = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
+    return qMul(cq2, cq1);
+  }
+
+  /** CTPanoramaView 方式。iPad は 90°/270° の補正を入れ替え */
   function landscapeScreenFixQuat(screenAngleDeg) {
     var a = Math.round(normalizeAngle360(screenAngleDeg));
-    if (a === 90) {
-      var cq1 = qFromAxisAngle(0, 1, 0, Math.PI / 2);
-      var cq2 = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
-      return qMul(cq2, cq1);
-    }
-    if (a === 270) {
-      var cq1b = qFromAxisAngle(0, 1, 0, -Math.PI / 2);
-      var cq2b = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
-      return qMul(cq2b, cq1b);
+    if (isIPadDevice()) {
+      if (a === 90) return landscapeFixLandscapeLeft();
+      if (a === 270) return landscapeFixLandscapeRight();
+    } else {
+      if (a === 90) return landscapeFixLandscapeRight();
+      if (a === 270) return landscapeFixLandscapeLeft();
     }
     return qFromAxisAngle(1, 0, 0, -Math.PI / 2);
   }
@@ -154,6 +171,20 @@
       y: iy * qw + iw * -qy + iz * -qx - ix * -qz,
       z: iz * qw + iw * -qz + ix * -qy - iy * -qx
     };
+  }
+
+  function qLp(prev, next, k) {
+    if (!prev) return qNormalize(next);
+    return qNormalize({
+      w: lp(prev.w, next.w, k),
+      x: lp(prev.x, next.x, k),
+      y: lp(prev.y, next.y, k),
+      z: lp(prev.z, next.z, k)
+    });
+  }
+
+  function qRemoveYaw(q, yawRad) {
+    return qMul(qFromAxisAngle(0, 1, 0, -yawRad), q);
   }
 
   function relativePitchFromQuat(qInit, qCurr) {
@@ -197,6 +228,7 @@
     state.headingMode = true;
     state.lastHStepAbs = 0;
     state.qInit = null;
+    state.fQuat = null;
     state.calibCount = 0;
     state.lastPitchOff = 0;
   }
@@ -255,11 +287,16 @@
 
   /**
    * 横画面: 左右=コンパス、上下=クォータニオン差分
-   * alpha/beta/gamma を 3D 回転に変換し、画面向きを補正してから pitch を取る。
+   * コンパスで左右を回した分を上下計算から外す（iPad の2点固定対策）
    */
   function trackLandscape(rawEvent, screenAngleDeg, state) {
     var qCurr = deviceQuatLandscape(rawEvent, screenAngleDeg);
     if (!qCurr) return null;
+
+    if (isIPadDevice()) {
+      qCurr = qLp(state.fQuat, qCurr, LANDSCAPE_QUAT_LP);
+      state.fQuat = qCurr;
+    }
 
     if (state.qInit == null) {
       state.calibCount = (state.calibCount || 0) + 1;
@@ -267,6 +304,7 @@
         return { ready: false };
       }
       state.qInit = qCurr;
+      state.fQuat = qCurr;
       state.prevHeading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
       state.initHeading = state.prevHeading;
       state.unwrappedHeading = state.prevHeading != null ? state.prevHeading : 0;
@@ -289,7 +327,8 @@
       state.headingMode = false;
     }
 
-    var pitchOff = relativePitchFromQuat(state.qInit, qCurr) * landscapePitchSign();
+    var qTilt = qRemoveYaw(qCurr, yawOff);
+    var pitchOff = relativePitchFromQuat(state.qInit, qTilt) * landscapePitchSign();
 
     if (state.lastHStepAbs > LANDSCAPE_YAW_IGNORE_PITCH) {
       pitchOff = state.lastPitchOff;
@@ -422,6 +461,7 @@
       lastTrackMode: null,
       lastHStepAbs: 0,
       qInit: null,
+      fQuat: null,
       calibCount: 0,
       lastPitchOff: 0
     };
