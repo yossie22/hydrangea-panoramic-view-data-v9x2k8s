@@ -1,8 +1,8 @@
 /**
- * パノラマ用ジャイロ制御 v19
+ * パノラマ用ジャイロ制御 v20
  * 縦画面: v13 そのまま
- * 横画面: 左右=コンパス、上下=画面法線＋なめらか制御（tanh で急加速を防ぐ）
- * 詳細: vendor/gyro-STABLE-v19.txt
+ * 横画面: 左右=コンパス、上下=gamma 線形（途中も滑らか、2点固定を解消）
+ * 詳細: vendor/gyro-STABLE-v20.txt
  */
 (function(global) {
   'use strict';
@@ -15,15 +15,14 @@
   var SENSOR_LP = 0.22;
   var MAX_PITCH_OFF = Math.PI * 50 / 180;
 
-  var LANDSCAPE_PITCH_SENSOR_LP = 0.11;
-  var LANDSCAPE_PITCH_SMOOTH = 0.10;
-  var LANDSCAPE_PITCH_MAX_STEP = 0.013;
-  var LANDSCAPE_PITCH_GAIN = 0.55;
-  var LANDSCAPE_PITCH_SOFT = Math.PI * 34 / 180;
-  var LANDSCAPE_PITCH_RANGE = Math.PI * 68 / 180;
+  var LANDSCAPE_PITCH_SENSOR_LP = 0.16;
+  var LANDSCAPE_PITCH_SMOOTH = 0.13;
+  var LANDSCAPE_PITCH_MAX_STEP = 0.016;
+  var LANDSCAPE_PITCH_GAIN = 0.72;
+  var LANDSCAPE_PITCH_MAX = Math.PI * 58 / 180;
+  var LANDSCAPE_PITCH_RATE = 0.022;
   var LANDSCAPE_YAW_PITCH_SLIDE = 0.88;
-  var LANDSCAPE_PITCH_SIGN = 1;
-  var BUILD = 'v19';
+  var BUILD = 'v20';
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -81,27 +80,17 @@
     return normalizeAngle360(raw - screenAngleDeg);
   }
 
-  function landscapePitchSampleRad(rawEvent) {
-    if (rawEvent.beta == null || rawEvent.gamma == null) return null;
-    var a = degToRad(rawEvent.alpha != null ? rawEvent.alpha : 0);
-    var b = degToRad(rawEvent.beta);
-    var g = degToRad(rawEvent.gamma);
-    var ca = Math.cos(a), sa = Math.sin(a);
-    var cb = Math.cos(b), sb = Math.sin(b);
-    var cg = Math.cos(g), sg = Math.sin(g);
-    var zx = ca * sb * cg + sa * sg;
-    var zy = sa * sb * cg - ca * sg;
-    var zz = cb * cg;
-    var horiz = Math.sqrt(zx * zx + zy * zy);
-    if (horiz < 1e-6) horiz = 1e-6;
-    return LANDSCAPE_PITCH_SIGN * Math.atan2(zz, horiz);
-  }
-
-  /** 急にフルパワーにならない S 字カーブ */
-  function softLandscapePitchOff(rawOff) {
-    rawOff *= LANDSCAPE_PITCH_GAIN;
-    if (LANDSCAPE_PITCH_SOFT < 1e-6) return 0;
-    return Math.tanh(rawOff / LANDSCAPE_PITCH_SOFT) * LANDSCAPE_PITCH_RANGE;
+  /**
+   * 横画面の上下: gamma（度）をそのまま使う
+   * 画面を傾けると連続的に変わる（法線仰角の2点固定を避ける）
+   */
+  function landscapePitchSampleRad(rawEvent, screenAngleDeg) {
+    if (rawEvent.gamma == null || isNaN(rawEvent.gamma)) return null;
+    var g = rawEvent.gamma;
+    var a = Math.round(normalizeAngle360(screenAngleDeg));
+    if (a === 90) return degToRad(g);
+    if (a === 270) return degToRad(-g);
+    return degToRad(g);
   }
 
   function resetOrientState(state) {
@@ -117,6 +106,7 @@
     state.gammaYawDeg = 0;
     state.headingMode = true;
     state.lastHStepAbs = 0;
+    state.prevPitchOff = 0;
   }
 
   function trackYawFromHeading(heading, state) {
@@ -172,7 +162,7 @@
   }
 
   function trackLandscape(rawEvent, screenAngleDeg, state) {
-    var pitchSample = landscapePitchSampleRad(rawEvent);
+    var pitchSample = landscapePitchSampleRad(rawEvent, screenAngleDeg);
     if (pitchSample == null) return null;
 
     if (state.initPitch == null) {
@@ -186,6 +176,7 @@
       state.gammaYawDeg = 0;
       state.headingMode = state.prevHeading != null;
       state.lastHStepAbs = 0;
+      state.prevPitchOff = 0;
       return { ready: false };
     }
 
@@ -205,7 +196,13 @@
     }
 
     state.fPitch = lp(state.fPitch, pitchSample, LANDSCAPE_PITCH_SENSOR_LP);
-    var pitchOff = softLandscapePitchOff(state.initPitch - state.fPitch);
+
+    var rawOff = (state.initPitch - state.fPitch) * LANDSCAPE_PITCH_GAIN;
+    var pitchOff = clamp(rawOff, -LANDSCAPE_PITCH_MAX, LANDSCAPE_PITCH_MAX);
+
+    var prev = state.prevPitchOff || 0;
+    pitchOff = clamp(pitchOff, prev - LANDSCAPE_PITCH_RATE, prev + LANDSCAPE_PITCH_RATE);
+    state.prevPitchOff = pitchOff;
 
     return { ready: true, yawOff: yawOff, pitchOff: pitchOff, landscape: true };
   }
@@ -325,7 +322,8 @@
       headingMode: true,
       lastScreenAngle: getScreenAngleDeg(),
       lastTrackMode: null,
-      lastHStepAbs: 0
+      lastHStepAbs: 0,
+      prevPitchOff: 0
     };
 
     this._bindOrientation();
@@ -355,7 +353,14 @@
       if (!o || !o.ready) return;
 
       var targetYaw = self.base.viewYaw + o.yawOff;
-      var targetPitch = clamp(self.base.viewPitch + o.pitchOff, -Math.PI / 2, Math.PI / 2);
+      var relMax = o.landscape ? LANDSCAPE_PITCH_MAX : MAX_PITCH_OFF;
+      var targetPitch = clamp(
+        self.base.viewPitch + o.pitchOff,
+        self.base.viewPitch - relMax,
+        self.base.viewPitch + relMax
+      );
+      targetPitch = clamp(targetPitch, -Math.PI / 2, Math.PI / 2);
+
       var pitchSmooth = o.landscape ? LANDSCAPE_PITCH_SMOOTH : PITCH_SMOOTH;
       var pitchMaxStep = o.landscape ? LANDSCAPE_PITCH_MAX_STEP : PITCH_MAX_STEP;
 
