@@ -1,9 +1,8 @@
 /**
- * パノラマ用ジャイロ制御 v23
+ * パノラマ用ジャイロ制御 v24
  * 縦画面: v13 そのまま
- * 横画面: 左右=コンパス、上下=beta の「変化量」を積み上げ
- * iPhone/iPad で beta の向きを切替
- * 詳細: vendor/gyro-STABLE-v23.txt
+ * 横画面: 左右=コンパス、上下=クォータニオン+画面向き補正（CTPanoramaView 方式）
+ * 詳細: vendor/gyro-STABLE-v24.txt
  */
 (function(global) {
   'use strict';
@@ -16,13 +15,13 @@
   var SENSOR_LP = 0.22;
   var MAX_PITCH_OFF = Math.PI * 50 / 180;
 
-  var LANDSCAPE_PITCH_GAIN = 0.88;
   var LANDSCAPE_PITCH_SMOOTH = 0.14;
   var LANDSCAPE_PITCH_MAX_STEP = 0.015;
   var LANDSCAPE_PITCH_MAX = Math.PI * 55 / 180;
-  var LANDSCAPE_PITCH_DELTA_MAX = Math.PI * 2.5 / 180;
   var LANDSCAPE_YAW_IGNORE_PITCH = 0.45;
-  var BUILD = 'v23';
+  var LANDSCAPE_CALIB_FRAMES = 8;
+  var LANDSCAPE_PITCH_SIGN = 1;
+  var BUILD = 'v24';
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -50,6 +49,10 @@
     return false;
   }
 
+  function landscapePitchSign() {
+    return isIPhoneDevice() ? -LANDSCAPE_PITCH_SIGN : LANDSCAPE_PITCH_SIGN;
+  }
+
   function getScreenAngleDeg() {
     if (global.screen && global.screen.orientation &&
         typeof global.screen.orientation.angle === 'number') {
@@ -62,6 +65,101 @@
   function isPortraitScreen(screenAngleDeg) {
     var a = Math.round(normalizeAngle360(screenAngleDeg));
     return a === 0 || a === 180;
+  }
+
+  function qNormalize(q) {
+    var len = Math.sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
+    if (len < 1e-8) return { w: 1, x: 0, y: 0, z: 0 };
+    return { w: q.w / len, x: q.x / len, y: q.y / len, z: q.z / len };
+  }
+
+  function qMul(a, b) {
+    return qNormalize({
+      w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+      x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+      y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+      z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w
+    });
+  }
+
+  function qConj(q) {
+    return { w: q.w, x: -q.x, y: -q.y, z: -q.z };
+  }
+
+  function qFromAxisAngle(ax, ay, az, angleRad) {
+    var half = angleRad * 0.5;
+    var s = Math.sin(half);
+    return qNormalize({
+      w: Math.cos(half),
+      x: ax * s,
+      y: ay * s,
+      z: az * s
+    });
+  }
+
+  function deviceEulerToQuat(alphaDeg, betaDeg, gammaDeg) {
+    if (betaDeg == null || gammaDeg == null) return null;
+    if (isNaN(betaDeg) || isNaN(gammaDeg)) return null;
+    if (alphaDeg == null || isNaN(alphaDeg)) alphaDeg = 0;
+    var a = degToRad(alphaDeg);
+    var b = degToRad(betaDeg);
+    var g = degToRad(gammaDeg);
+    var cA = Math.cos(a * 0.5);
+    var sA = Math.sin(a * 0.5);
+    var cB = Math.cos(b * 0.5);
+    var sB = Math.sin(b * 0.5);
+    var cG = Math.cos(g * 0.5);
+    var sG = Math.sin(g * 0.5);
+    return qNormalize({
+      w: cA * cB * cG - sA * sB * sG,
+      x: sA * sB * cG + cA * cB * sG,
+      y: sA * cB * cG + cA * sB * sG,
+      z: cA * sB * cG - sA * cB * sG
+    });
+  }
+
+  /** CTPanoramaView と同じ画面向き補正（横画面用） */
+  function landscapeScreenFixQuat(screenAngleDeg) {
+    var a = Math.round(normalizeAngle360(screenAngleDeg));
+    if (a === 90) {
+      var cq1 = qFromAxisAngle(0, 1, 0, Math.PI / 2);
+      var cq2 = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
+      return qMul(cq2, cq1);
+    }
+    if (a === 270) {
+      var cq1b = qFromAxisAngle(0, 1, 0, -Math.PI / 2);
+      var cq2b = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
+      return qMul(cq2b, cq1b);
+    }
+    return qFromAxisAngle(1, 0, 0, -Math.PI / 2);
+  }
+
+  function deviceQuatLandscape(rawEvent, screenAngleDeg) {
+    var q = deviceEulerToQuat(rawEvent.alpha, rawEvent.beta, rawEvent.gamma);
+    if (!q) return null;
+    return qMul(landscapeScreenFixQuat(screenAngleDeg), q);
+  }
+
+  function quatRotateVec(q, x, y, z) {
+    var qx = q.x;
+    var qy = q.y;
+    var qz = q.z;
+    var qw = q.w;
+    var ix = qw * x + qy * z - qz * y;
+    var iy = qw * y + qz * x - qx * z;
+    var iz = qw * z + qx * y - qy * x;
+    var iw = -qx * x - qy * y - qz * z;
+    return {
+      x: ix * qw + iw * -qx + iy * -qz - iz * -qy,
+      y: iy * qw + iw * -qy + iz * -qx - ix * -qz,
+      z: iz * qw + iw * -qz + ix * -qy - iy * -qx
+    };
+  }
+
+  function relativePitchFromQuat(qInit, qCurr) {
+    var qRel = qMul(qConj(qInit), qCurr);
+    var look = quatRotateVec(qRel, 0, 0, -1);
+    return Math.atan2(look.y, Math.sqrt(look.x * look.x + look.z * look.z));
   }
 
   function readHeadingDegPortrait(rawEvent) {
@@ -87,17 +185,6 @@
     return normalizeAngle360(raw - screenAngleDeg);
   }
 
-  /** 横画面の上下センサー（beta 度→ラジアン）iPhone/iPad で向きを切替 */
-  function landscapePitchSampleRad(betaDeg, screenAngleDeg) {
-    if (betaDeg == null || isNaN(betaDeg)) return null;
-    var b = betaDeg;
-    var a = Math.round(normalizeAngle360(screenAngleDeg));
-    var iphone = isIPhoneDevice();
-    if (a === 90) return degToRad(iphone ? -b : b);
-    if (a === 270) return degToRad(iphone ? b : -b);
-    return degToRad(iphone ? -b : b);
-  }
-
   function resetOrientState(state) {
     state.initBeta = null;
     state.fBeta = null;
@@ -109,8 +196,9 @@
     state.gammaYawDeg = 0;
     state.headingMode = true;
     state.lastHStepAbs = 0;
-    state.pitchIntegral = null;
-    state.prevPitchSample = null;
+    state.qInit = null;
+    state.calibCount = 0;
+    state.lastPitchOff = 0;
   }
 
   function trackYawFromHeading(heading, state) {
@@ -166,30 +254,30 @@
   }
 
   /**
-   * 横画面: 上下は beta の「変化量」を積み上げ
-   * gamma は横画面で端に張り付くため beta を使う。
-   * 左右を向いている間は上下を止める。
+   * 横画面: 左右=コンパス、上下=クォータニオン差分
+   * alpha/beta/gamma を 3D 回転に変換し、画面向きを補正してから pitch を取る。
    */
   function trackLandscape(rawEvent, screenAngleDeg, state) {
-    if (rawEvent.beta == null || isNaN(rawEvent.beta)) return null;
+    var qCurr = deviceQuatLandscape(rawEvent, screenAngleDeg);
+    if (!qCurr) return null;
 
-    if (state.pitchIntegral == null) {
-      state.pitchIntegral = 0;
-      state.initBeta = rawEvent.beta;
-      state.fBeta = rawEvent.beta;
-      state.prevPitchSample = landscapePitchSampleRad(state.fBeta, screenAngleDeg);
-      state.initGamma = rawEvent.gamma;
-      state.fGamma = rawEvent.gamma;
+    if (state.qInit == null) {
+      state.calibCount = (state.calibCount || 0) + 1;
+      if (state.calibCount < LANDSCAPE_CALIB_FRAMES) {
+        return { ready: false };
+      }
+      state.qInit = qCurr;
       state.prevHeading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
       state.initHeading = state.prevHeading;
       state.unwrappedHeading = state.prevHeading != null ? state.prevHeading : 0;
+      state.initGamma = rawEvent.gamma;
+      state.fGamma = rawEvent.gamma;
       state.gammaYawDeg = 0;
       state.headingMode = state.prevHeading != null;
       state.lastHStepAbs = 0;
+      state.lastPitchOff = 0;
       return { ready: false };
     }
-
-    state.fBeta = lp(state.fBeta, rawEvent.beta, SENSOR_LP);
 
     var heading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
     var yawOff = trackYawFromHeading(heading, state);
@@ -201,24 +289,20 @@
       state.headingMode = false;
     }
 
-    var pitchSample = landscapePitchSampleRad(state.fBeta, screenAngleDeg);
-    if (pitchSample == null) return null;
-
-    var sampleDelta = pitchSample - state.prevPitchSample;
-    state.prevPitchSample = pitchSample;
-    sampleDelta = clamp(sampleDelta, -LANDSCAPE_PITCH_DELTA_MAX, LANDSCAPE_PITCH_DELTA_MAX);
+    var pitchOff = relativePitchFromQuat(state.qInit, qCurr) * landscapePitchSign();
 
     if (state.lastHStepAbs > LANDSCAPE_YAW_IGNORE_PITCH) {
-      sampleDelta = 0;
+      pitchOff = state.lastPitchOff;
+    } else {
+      state.lastPitchOff = pitchOff;
     }
 
-    state.pitchIntegral += sampleDelta * LANDSCAPE_PITCH_GAIN;
-    state.pitchIntegral = clamp(state.pitchIntegral, -LANDSCAPE_PITCH_MAX, LANDSCAPE_PITCH_MAX);
+    pitchOff = clamp(pitchOff, -LANDSCAPE_PITCH_MAX, LANDSCAPE_PITCH_MAX);
 
     return {
       ready: true,
       yawOff: yawOff,
-      pitchOff: state.pitchIntegral,
+      pitchOff: pitchOff,
       landscape: true
     };
   }
@@ -337,8 +421,9 @@
       lastScreenAngle: getScreenAngleDeg(),
       lastTrackMode: null,
       lastHStepAbs: 0,
-      pitchIntegral: null,
-      prevPitchSample: null
+      qInit: null,
+      calibCount: 0,
+      lastPitchOff: 0
     };
 
     this._bindOrientation();

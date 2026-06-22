@@ -1,0 +1,21 @@
+万年山VR — ジャイロ v24
+====================================
+2026-06-22
+
+■ v23 の問題
+  横画面の上下が iPad=横/地面、iPhone=横で固着のまま
+  beta/gamma 単体では横画面のジンバルロックを避けられない
+
+■ v24
+  横・上下 … alpha/beta/gamma → クォータニオン → 画面向き補正 → pitch
+            （iOS ネイティブ CTPanoramaView と同じ考え方）
+  横・左右 … コンパス（v17 以降と同じ）
+  起動 … 8 フレーム待ってから基準クォータニオンを決める
+  左右を大きく向いている間 … 上下を止める
+  iPhone … LANDSCAPE_PITCH_SIGN を反転
+  縦 … v13 そのまま
+
+■ 確認: GYRO 横 v24、タブを閉じて開き直す
+
+■ 上下が逆 … LANDSCAPE_PITCH_SIGN を -1 に変更
+■ 左右が逆 … readHeadingDegLandscape の符号
