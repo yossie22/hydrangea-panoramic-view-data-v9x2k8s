@@ -1,8 +1,9 @@
 /**
- * パノラマ用ジャイロ制御 v20
+ * パノラマ用ジャイロ制御 v21
  * 縦画面: v13 そのまま
- * 横画面: 左右=コンパス、上下=gamma 線形（途中も滑らか、2点固定を解消）
- * 詳細: vendor/gyro-STABLE-v20.txt
+ * 横画面: 左右=コンパス、上下=beta 線形（iPhone/iPad で符号切替）
+ * 起動待ち・感度低め・地面/空で固まったら基準リセット
+ * 詳細: vendor/gyro-STABLE-v21.txt
  */
 (function(global) {
   'use strict';
@@ -15,14 +16,18 @@
   var SENSOR_LP = 0.22;
   var MAX_PITCH_OFF = Math.PI * 50 / 180;
 
-  var LANDSCAPE_PITCH_SENSOR_LP = 0.16;
-  var LANDSCAPE_PITCH_SMOOTH = 0.13;
-  var LANDSCAPE_PITCH_MAX_STEP = 0.016;
-  var LANDSCAPE_PITCH_GAIN = 0.72;
-  var LANDSCAPE_PITCH_MAX = Math.PI * 58 / 180;
-  var LANDSCAPE_PITCH_RATE = 0.022;
-  var LANDSCAPE_YAW_PITCH_SLIDE = 0.88;
-  var BUILD = 'v20';
+  var LANDSCAPE_PITCH_SENSOR_LP = 0.14;
+  var LANDSCAPE_PITCH_SMOOTH = 0.12;
+  var LANDSCAPE_PITCH_MAX_STEP = 0.012;
+  var LANDSCAPE_PITCH_GAIN = 0.34;
+  var LANDSCAPE_PITCH_MAX = Math.PI * 42 / 180;
+  var LANDSCAPE_PITCH_RATE = 0.014;
+  var LANDSCAPE_PITCH_DEAD = Math.PI * 2 / 180;
+  var LANDSCAPE_YAW_PITCH_SLIDE = 0.90;
+  var LANDSCAPE_WARMUP = 12;
+  var LANDSCAPE_STUCK_LIMIT = 1.06;
+  var LANDSCAPE_STUCK_FRAMES = 28;
+  var BUILD = 'v21';
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -41,6 +46,18 @@
     d = d % 360;
     if (d < 0) d += 360;
     return d;
+  }
+
+  function isIPhoneDevice() {
+    var ua = navigator.userAgent || '';
+    if (/iPad/.test(ua)) return false;
+    if (/iPhone|iPod/.test(ua)) return true;
+    return false;
+  }
+
+  /** iPhone は上下符号を反転（iPad とは逆） */
+  function landscapePitchSign() {
+    return isIPhoneDevice() ? -1 : 1;
   }
 
   function getScreenAngleDeg() {
@@ -80,17 +97,9 @@
     return normalizeAngle360(raw - screenAngleDeg);
   }
 
-  /**
-   * 横画面の上下: gamma（度）をそのまま使う
-   * 画面を傾けると連続的に変わる（法線仰角の2点固定を避ける）
-   */
-  function landscapePitchSampleRad(rawEvent, screenAngleDeg) {
-    if (rawEvent.gamma == null || isNaN(rawEvent.gamma)) return null;
-    var g = rawEvent.gamma;
-    var a = Math.round(normalizeAngle360(screenAngleDeg));
-    if (a === 90) return degToRad(g);
-    if (a === 270) return degToRad(-g);
-    return degToRad(g);
+  function landscapePitchSampleRad(rawEvent) {
+    if (rawEvent.beta == null || isNaN(rawEvent.beta)) return null;
+    return degToRad(rawEvent.beta);
   }
 
   function resetOrientState(state) {
@@ -107,6 +116,15 @@
     state.headingMode = true;
     state.lastHStepAbs = 0;
     state.prevPitchOff = 0;
+    state.warmupPitch = null;
+    state.stuckPitchFrames = 0;
+  }
+
+  function releaseLandscapePitchStick(state, displayPitch, base) {
+    if (state.fPitch != null) state.initPitch = state.fPitch;
+    if (base) base.viewPitch = displayPitch;
+    state.prevPitchOff = 0;
+    state.stuckPitchFrames = 0;
   }
 
   function trackYawFromHeading(heading, state) {
@@ -162,12 +180,16 @@
   }
 
   function trackLandscape(rawEvent, screenAngleDeg, state) {
-    var pitchSample = landscapePitchSampleRad(rawEvent, screenAngleDeg);
+    var pitchSample = landscapePitchSampleRad(rawEvent);
     if (pitchSample == null) return null;
 
     if (state.initPitch == null) {
-      state.initPitch = pitchSample;
-      state.fPitch = pitchSample;
+      if (!state.warmupPitch) state.warmupPitch = [];
+      state.warmupPitch.push(pitchSample);
+      if (state.warmupPitch.length < LANDSCAPE_WARMUP) return { ready: false };
+      state.initPitch = state.warmupPitch[state.warmupPitch.length - 1];
+      state.fPitch = state.initPitch;
+      state.warmupPitch = null;
       state.initGamma = rawEvent.gamma;
       state.fGamma = rawEvent.gamma;
       state.prevHeading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
@@ -197,7 +219,9 @@
 
     state.fPitch = lp(state.fPitch, pitchSample, LANDSCAPE_PITCH_SENSOR_LP);
 
-    var rawOff = (state.initPitch - state.fPitch) * LANDSCAPE_PITCH_GAIN;
+    var delta = state.initPitch - state.fPitch;
+    if (Math.abs(delta) < LANDSCAPE_PITCH_DEAD) delta = 0;
+    var rawOff = landscapePitchSign() * delta * LANDSCAPE_PITCH_GAIN;
     var pitchOff = clamp(rawOff, -LANDSCAPE_PITCH_MAX, LANDSCAPE_PITCH_MAX);
 
     var prev = state.prevPitchOff || 0;
@@ -323,7 +347,9 @@
       lastScreenAngle: getScreenAngleDeg(),
       lastTrackMode: null,
       lastHStepAbs: 0,
-      prevPitchOff: 0
+      prevPitchOff: 0,
+      warmupPitch: null,
+      stuckPitchFrames: 0
     };
 
     this._bindOrientation();
@@ -351,6 +377,15 @@
         ? trackPortrait(self.latestEvent, self.orientState)
         : trackLandscape(self.latestEvent, screenAngle, self.orientState);
       if (!o || !o.ready) return;
+
+      if (o.landscape && Math.abs(self.displayPitch) >= LANDSCAPE_STUCK_LIMIT) {
+        self.orientState.stuckPitchFrames++;
+        if (self.orientState.stuckPitchFrames >= LANDSCAPE_STUCK_FRAMES) {
+          releaseLandscapePitchStick(self.orientState, self.displayPitch, self.base);
+        }
+      } else {
+        self.orientState.stuckPitchFrames = 0;
+      }
 
       var targetYaw = self.base.viewYaw + o.yawOff;
       var relMax = o.landscape ? LANDSCAPE_PITCH_MAX : MAX_PITCH_OFF;
