@@ -1,9 +1,9 @@
 /**
- * パノラマ用ジャイロ制御 v28
+ * パノラマ用ジャイロ制御 v29
  * 縦画面: v13 ベース（下方向の角度制限を緩和）
  * 横画面: クォータニオン+変化量積み上げ
- * v28: 横画面コンパス補正の二重適用を修正（90°左回転の原因）
- * 詳細: vendor/gyro-STABLE-v28.txt
+ * v29: 横画面角度が確定してから切替、左右基準を同時リセット
+ * 詳細: vendor/gyro-STABLE-v29.txt
  */
 (function(global) {
   'use strict';
@@ -25,7 +25,38 @@
   var LANDSCAPE_YAW_IGNORE_PITCH = 0.45;
   var LANDSCAPE_CALIB_FRAMES = 6;
   var LANDSCAPE_PITCH_SIGN = 1;
-  var BUILD = 'v28';
+  var BUILD = 'v29';
+
+  function isLandscapeAngleDeg(screenAngleDeg) {
+    var a = Math.round(normalizeAngle360(screenAngleDeg));
+    return a === 90 || a === 270;
+  }
+
+  function isPortraitAngleDeg(screenAngleDeg) {
+    var a = Math.round(normalizeAngle360(screenAngleDeg));
+    return a === 0 || a === 180;
+  }
+
+  function isIPadDevice() {
+    var ua = navigator.userAgent || '';
+    if (/iPad/.test(ua)) return true;
+    return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+  }
+
+  /** portrait / landscape / null(切替中) */
+  function resolveTrackMode(screenAngleDeg) {
+    if (global.matchMedia) {
+      if (global.matchMedia('(orientation: portrait)').matches) {
+        return isPortraitAngleDeg(screenAngleDeg) ? 'portrait' : null;
+      }
+      if (global.matchMedia('(orientation: landscape)').matches) {
+        return isLandscapeAngleDeg(screenAngleDeg) ? 'landscape' : null;
+      }
+    }
+    if (isPortraitAngleDeg(screenAngleDeg)) return 'portrait';
+    if (isLandscapeAngleDeg(screenAngleDeg)) return 'landscape';
+    return null;
+  }
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -60,12 +91,7 @@
   }
 
   function isPortraitScreen(screenAngleDeg) {
-    if (global.matchMedia) {
-      if (global.matchMedia('(orientation: portrait)').matches) return true;
-      if (global.matchMedia('(orientation: landscape)').matches) return false;
-    }
-    var a = Math.round(normalizeAngle360(screenAngleDeg));
-    return a === 0 || a === 180;
+    return resolveTrackMode(screenAngleDeg) === 'portrait';
   }
 
   function qNormalize(q) {
@@ -133,8 +159,13 @@
 
   function landscapeScreenFixQuat(screenAngleDeg) {
     var a = Math.round(normalizeAngle360(screenAngleDeg));
-    if (a === 90) return landscapeFixLandscapeRight();
-    if (a === 270) return landscapeFixLandscapeLeft();
+    if (isIPadDevice()) {
+      if (a === 90) return landscapeFixLandscapeLeft();
+      if (a === 270) return landscapeFixLandscapeRight();
+    } else {
+      if (a === 90) return landscapeFixLandscapeRight();
+      if (a === 270) return landscapeFixLandscapeLeft();
+    }
     return qFromAxisAngle(1, 0, 0, -Math.PI / 2);
   }
 
@@ -162,8 +193,19 @@
 
   function relativePitchFromQuat(qInit, qCurr) {
     var qRel = qMul(qConj(qInit), qCurr);
+    if (isIPadDevice()) {
+      var sinp = 2 * (qRel.w * qRel.x - qRel.y * qRel.z);
+      return Math.asin(clamp(sinp, -1, 1));
+    }
     var look = quatRotateVec(qRel, 0, 0, -1);
     return Math.atan2(look.y, Math.sqrt(look.x * look.x + look.z * look.z));
+  }
+
+  function syncLandscapeHeading(state, heading) {
+    state.initHeading = heading;
+    state.prevHeading = heading;
+    state.unwrappedHeading = heading != null ? heading : 0;
+    state.headingMode = heading != null;
   }
 
   function readHeadingDegPortrait(rawEvent) {
@@ -178,10 +220,8 @@
   }
 
   function readHeadingDegLandscape(rawEvent, screenAngleDeg) {
-    if (typeof rawEvent.webkitCompassHeading === 'number' &&
-        !isNaN(rawEvent.webkitCompassHeading)) {
-      return rawEvent.webkitCompassHeading;
-    }
+    var portraitHeading = readHeadingDegPortrait(rawEvent);
+    if (portraitHeading != null) return portraitHeading;
     if (rawEvent.alpha != null && !isNaN(rawEvent.alpha)) {
       return normalizeAngle360(rawEvent.alpha - screenAngleDeg);
     }
@@ -285,25 +325,23 @@
         return { ready: false };
       }
       state.landscapePrimed = true;
-      state.prevHeading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
-      state.initHeading = state.prevHeading;
-      state.unwrappedHeading = state.prevHeading != null ? state.prevHeading : 0;
       state.initGamma = rawEvent.gamma;
       state.fGamma = rawEvent.gamma;
       state.gammaYawDeg = 0;
-      state.headingMode = state.prevHeading != null;
       state.lastHStepAbs = 0;
       return { ready: false };
     }
 
     var heading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
-    var yawOff = trackYawFromHeading(heading, state);
+    var yawOff = 0;
 
     if (heading == null && rawEvent.gamma != null && state.initGamma != null) {
       state.fGamma = lp(state.fGamma, rawEvent.gamma, SENSOR_LP);
       state.gammaYawDeg = state.fGamma - state.initGamma;
       yawOff = degToRad(state.gammaYawDeg);
       state.headingMode = false;
+    } else if (state.landscapeReady) {
+      yawOff = trackYawFromHeading(heading, state);
     }
 
     var pitchSample = relativePitchFromQuat(state.qInit || qCurr, qCurr) * landscapePitchSign();
@@ -314,7 +352,10 @@
       state.prevPitchSample = pitchSample;
       state.pitchIntegral = 0;
       state.landscapeReady = true;
+      syncLandscapeHeading(state, heading);
       state.lastPitchOff = 0;
+      yawOff = 0;
+      pitchOff = 0;
     } else {
       var sampleDelta = pitchSample - state.prevPitchSample;
       sampleDelta = normalizeAngle(sampleDelta);
@@ -479,11 +520,17 @@
       if (!v || !self.latestEvent || !self.orientState) return;
 
       var screenAngle = getScreenAngleDeg();
-      var portrait = isPortraitScreen(screenAngle);
-      var trackMode = portrait ? 'portrait' : 'landscape';
+      var trackMode = resolveTrackMode(screenAngle);
 
-      if (self.orientState.lastScreenAngle !== screenAngle ||
-          self.orientState.lastTrackMode !== trackMode) {
+      if (trackMode == null) {
+        return;
+      }
+
+      var portrait = trackMode === 'portrait';
+
+      if (self.orientState.lastTrackMode !== trackMode ||
+          (trackMode === 'landscape' &&
+           self.orientState.lastScreenAngle !== screenAngle)) {
         self.orientState.lastScreenAngle = screenAngle;
         self.orientState.lastTrackMode = trackMode;
         self._recalibrateForScreenRotate();
