@@ -1,9 +1,9 @@
 /**
- * パノラマ用ジャイロ制御 v26
- * 縦画面: v13 そのまま
- * 横画面: クォータニオン+画面向き補正
- * v26: iPad縦横判定修正、上下基準リセット、縦→横ずれ防止
- * 詳細: vendor/gyro-STABLE-v26.txt
+ * パノラマ用ジャイロ制御 v27
+ * 縦画面: v13 ベース（下方向の角度制限を緩和）
+ * 横画面: クォータニオン+変化量積み上げ（iPhone/iPad 共通）
+ * v27: 縦→横ずれ防止、iPad横=クォータニオン、地面方向の制限緩和
+ * 詳細: vendor/gyro-STABLE-v27.txt
  */
 (function(global) {
   'use strict';
@@ -14,16 +14,18 @@
   var YAW_MAX_STEP = 0.040;
   var HEADING_SPIKE_DEG = 55;
   var SENSOR_LP = 0.22;
-  var MAX_PITCH_OFF = Math.PI * 50 / 180;
+  var MAX_PITCH_UP = Math.PI * 50 / 180;
+  var MAX_PITCH_DOWN = Math.PI * 82 / 180;
 
   var LANDSCAPE_PITCH_SMOOTH = 0.14;
   var LANDSCAPE_PITCH_MAX_STEP = 0.015;
-  var LANDSCAPE_PITCH_MAX = Math.PI * 55 / 180;
+  var LANDSCAPE_PITCH_UP = Math.PI * 55 / 180;
+  var LANDSCAPE_PITCH_DOWN = Math.PI * 85 / 180;
+  var LANDSCAPE_PITCH_DELTA_MAX = Math.PI * 3 / 180;
   var LANDSCAPE_YAW_IGNORE_PITCH = 0.45;
-  var LANDSCAPE_CALIB_FRAMES = 8;
+  var LANDSCAPE_CALIB_FRAMES = 6;
   var LANDSCAPE_PITCH_SIGN = 1;
-  var LANDSCAPE_QUAT_LP = 0.18;
-  var BUILD = 'v26';
+  var BUILD = 'v27';
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -42,19 +44,6 @@
     d = d % 360;
     if (d < 0) d += 360;
     return d;
-  }
-
-  function isIPhoneDevice() {
-    var ua = navigator.userAgent || '';
-    if (/iPad/.test(ua)) return false;
-    if (/iPhone|iPod/.test(ua)) return true;
-    return false;
-  }
-
-  function isIPadDevice() {
-    var ua = navigator.userAgent || '';
-    if (/iPad/.test(ua)) return true;
-    return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
   }
 
   function landscapePitchSign() {
@@ -142,7 +131,6 @@
     return qMul(cq2, cq1);
   }
 
-  /** CTPanoramaView 方式（iPhone/iPad 共通） */
   function landscapeScreenFixQuat(screenAngleDeg) {
     var a = Math.round(normalizeAngle360(screenAngleDeg));
     if (a === 90) return landscapeFixLandscapeRight();
@@ -176,18 +164,6 @@
     var qRel = qMul(qConj(qInit), qCurr);
     var look = quatRotateVec(qRel, 0, 0, -1);
     return Math.atan2(look.y, Math.sqrt(look.x * look.x + look.z * look.z));
-  }
-
-  /** iPad 横画面: beta ベースの上下（クォータニオンが動かないときの予備） */
-  function landscapePitchFromBeta(rawEvent, state) {
-    if (rawEvent.beta == null || isNaN(rawEvent.beta)) return null;
-    if (state.landscapeInitBeta == null) state.landscapeInitBeta = rawEvent.beta;
-    state.landscapeFBeta = lp(state.landscapeFBeta, rawEvent.beta, SENSOR_LP);
-    return clamp(
-      degToRad(state.landscapeInitBeta - state.landscapeFBeta),
-      -LANDSCAPE_PITCH_MAX,
-      LANDSCAPE_PITCH_MAX
-    );
   }
 
   function readHeadingDegPortrait(rawEvent) {
@@ -225,11 +201,11 @@
     state.headingMode = true;
     state.lastHStepAbs = 0;
     state.qInit = null;
-    state.fQuat = null;
     state.calibCount = 0;
-    state.initPitchSample = null;
-    state.landscapeInitBeta = null;
-    state.landscapeFBeta = null;
+    state.landscapePrimed = false;
+    state.landscapeReady = false;
+    state.prevPitchSample = null;
+    state.pitchIntegral = 0;
     state.lastPitchOff = 0;
   }
 
@@ -270,7 +246,11 @@
     }
 
     state.fBeta = lp(state.fBeta, rawEvent.beta, SENSOR_LP);
-    var pitchOff = clamp(degToRad(state.initBeta - state.fBeta), -MAX_PITCH_OFF, MAX_PITCH_OFF);
+    var pitchOff = clamp(
+      degToRad(state.initBeta - state.fBeta),
+      -MAX_PITCH_DOWN,
+      MAX_PITCH_UP
+    );
 
     var heading = readHeadingDegPortrait(rawEvent);
     var yawOff = trackYawFromHeading(heading, state);
@@ -282,27 +262,30 @@
       state.headingMode = false;
     }
 
-    return { ready: true, yawOff: yawOff, pitchOff: pitchOff, landscape: false };
+    return {
+      ready: true,
+      yawOff: yawOff,
+      pitchOff: pitchOff,
+      landscape: false,
+      pitchDownMax: MAX_PITCH_DOWN,
+      pitchUpMax: MAX_PITCH_UP
+    };
   }
 
   /**
-   * 横画面: 左右=コンパス、上下=クォータニオン差分
-   * 開始時の pitch を 0 に合わせる（縦→横のずれ防止）
-   * iPad は beta ベースも併用
+   * 横画面: 左右=コンパス、上下=クォータニオン変化量の積み上げ
+   * 基準は最初の追従フレームで決める（縦→横の地面ずれ防止）
    */
   function trackLandscape(rawEvent, screenAngleDeg, state) {
     var qCurr = deviceQuatLandscape(rawEvent, screenAngleDeg);
     if (!qCurr) return null;
 
-    if (state.qInit == null) {
+    if (!state.landscapePrimed) {
       state.calibCount = (state.calibCount || 0) + 1;
       if (state.calibCount < LANDSCAPE_CALIB_FRAMES) {
         return { ready: false };
       }
-      state.qInit = qCurr;
-      state.initPitchSample = null;
-      state.landscapeInitBeta = rawEvent.beta;
-      state.landscapeFBeta = rawEvent.beta;
+      state.landscapePrimed = true;
       state.prevHeading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
       state.initHeading = state.prevHeading;
       state.unwrappedHeading = state.prevHeading != null ? state.prevHeading : 0;
@@ -311,7 +294,6 @@
       state.gammaYawDeg = 0;
       state.headingMode = state.prevHeading != null;
       state.lastHStepAbs = 0;
-      state.lastPitchOff = 0;
       return { ready: false };
     }
 
@@ -325,30 +307,43 @@
       state.headingMode = false;
     }
 
-    var pitchSample = relativePitchFromQuat(state.qInit, qCurr) * landscapePitchSign();
-    if (state.initPitchSample == null) {
-      state.initPitchSample = pitchSample;
-    }
-    var pitchOff = pitchSample - state.initPitchSample;
+    var pitchSample = relativePitchFromQuat(state.qInit || qCurr, qCurr) * landscapePitchSign();
+    var pitchOff = 0;
 
-    if (isIPadDevice()) {
-      var betaPitch = landscapePitchFromBeta(rawEvent, state);
-      if (betaPitch != null) pitchOff = betaPitch;
-    }
-
-    if (state.lastHStepAbs > LANDSCAPE_YAW_IGNORE_PITCH) {
-      pitchOff = state.lastPitchOff;
+    if (!state.landscapeReady) {
+      state.qInit = qCurr;
+      state.prevPitchSample = pitchSample;
+      state.pitchIntegral = 0;
+      state.landscapeReady = true;
+      state.lastPitchOff = 0;
     } else {
+      var sampleDelta = pitchSample - state.prevPitchSample;
+      sampleDelta = normalizeAngle(sampleDelta);
+      sampleDelta = clamp(sampleDelta, -LANDSCAPE_PITCH_DELTA_MAX, LANDSCAPE_PITCH_DELTA_MAX);
+
+      if (state.lastHStepAbs > LANDSCAPE_YAW_IGNORE_PITCH) {
+        sampleDelta = 0;
+      } else {
+        state.prevPitchSample = pitchSample;
+      }
+
+      state.pitchIntegral += sampleDelta;
+      state.pitchIntegral = clamp(
+        state.pitchIntegral,
+        -LANDSCAPE_PITCH_DOWN,
+        LANDSCAPE_PITCH_UP
+      );
+      pitchOff = state.pitchIntegral;
       state.lastPitchOff = pitchOff;
     }
-
-    pitchOff = clamp(pitchOff, -LANDSCAPE_PITCH_MAX, LANDSCAPE_PITCH_MAX);
 
     return {
       ready: true,
       yawOff: yawOff,
       pitchOff: pitchOff,
-      landscape: true
+      landscape: true,
+      pitchDownMax: LANDSCAPE_PITCH_DOWN,
+      pitchUpMax: LANDSCAPE_PITCH_UP
     };
   }
 
@@ -467,11 +462,11 @@
       lastTrackMode: null,
       lastHStepAbs: 0,
       qInit: null,
-      fQuat: null,
       calibCount: 0,
-      initPitchSample: null,
-      landscapeInitBeta: null,
-      landscapeFBeta: null,
+      landscapePrimed: false,
+      landscapeReady: false,
+      prevPitchSample: null,
+      pitchIntegral: 0,
       lastPitchOff: 0
     };
 
@@ -502,11 +497,12 @@
       if (!o || !o.ready) return;
 
       var targetYaw = self.base.viewYaw + o.yawOff;
-      var relMax = o.landscape ? LANDSCAPE_PITCH_MAX : MAX_PITCH_OFF;
+      var pitchDownMax = o.pitchDownMax || MAX_PITCH_DOWN;
+      var pitchUpMax = o.pitchUpMax || MAX_PITCH_UP;
       var targetPitch = clamp(
         self.base.viewPitch + o.pitchOff,
-        self.base.viewPitch - relMax,
-        self.base.viewPitch + relMax
+        self.base.viewPitch - pitchDownMax,
+        self.base.viewPitch + pitchUpMax
       );
       targetPitch = clamp(targetPitch, -Math.PI / 2, Math.PI / 2);
 
