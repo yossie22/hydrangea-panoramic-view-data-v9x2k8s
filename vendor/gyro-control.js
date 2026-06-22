@@ -1,8 +1,9 @@
 /**
- * パノラマ用ジャイロ制御 v17
- * 縦画面: v13 を完全復元（コンパスは補正なし・そのまま）
- * 横画面: 左右=コンパス（画面向き補正）、上下=生の beta（回転中は上下更新停止）
- * 詳細: vendor/gyro-STABLE-v17.txt
+ * パノラマ用ジャイロ制御 v18
+ * 縦画面: v13 そのまま（beta + コンパス）
+ * 横画面: 左右=コンパス、上下=画面の向きベクトル（左右を向いても上下がずれない）
+ * 横画面: 地面/空で固まったら上下基準を自動リセット
+ * 詳細: vendor/gyro-STABLE-v18.txt
  */
 (function(global) {
   'use strict';
@@ -13,8 +14,11 @@
   var YAW_MAX_STEP = 0.040;
   var HEADING_SPIKE_DEG = 55;
   var SENSOR_LP = 0.22;
-  var LANDSCAPE_YAW_FREEZE_PITCH_DEG = 1.2;
-  var BUILD = 'v17';
+  var MAX_PITCH_OFF = Math.PI * 50 / 180;
+  var STUCK_PITCH_LIMIT = 1.32;
+  var STUCK_PITCH_FRAMES = 40;
+  var LANDSCAPE_PITCH_SIGN = -1;
+  var BUILD = 'v18';
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -49,7 +53,6 @@
     return a === 0 || a === 180;
   }
 
-  /** v13 と同じ（縦画面用・補正なし） */
   function readHeadingDegPortrait(rawEvent) {
     if (typeof rawEvent.webkitCompassHeading === 'number' &&
         !isNaN(rawEvent.webkitCompassHeading)) {
@@ -61,7 +64,6 @@
     return null;
   }
 
-  /** 横画面用: コンパスを画面の上端基準に */
   function readHeadingDegLandscape(rawEvent, screenAngleDeg) {
     var raw = null;
     if (typeof rawEvent.webkitCompassHeading === 'number' &&
@@ -74,9 +76,28 @@
     return normalizeAngle360(raw - screenAngleDeg);
   }
 
+  /** 画面法線の仰角（左右を向いてもほぼ変わらない） */
+  function landscapePitchSampleRad(rawEvent) {
+    if (rawEvent.beta == null || rawEvent.gamma == null) return null;
+    var a = degToRad(rawEvent.alpha != null ? rawEvent.alpha : 0);
+    var b = degToRad(rawEvent.beta);
+    var g = degToRad(rawEvent.gamma);
+    var ca = Math.cos(a), sa = Math.sin(a);
+    var cb = Math.cos(b), sb = Math.sin(b);
+    var cg = Math.cos(g), sg = Math.sin(g);
+    var zx = ca * sb * cg + sa * sg;
+    var zy = sa * sb * cg - ca * sg;
+    var zz = cb * cg;
+    var horiz = Math.sqrt(zx * zx + zy * zy);
+    if (horiz < 1e-6) horiz = 1e-6;
+    return LANDSCAPE_PITCH_SIGN * Math.atan2(zz, horiz);
+  }
+
   function resetOrientState(state) {
     state.initBeta = null;
     state.fBeta = null;
+    state.initPitch = null;
+    state.fPitch = null;
     state.initGamma = null;
     state.fGamma = null;
     state.prevHeading = null;
@@ -84,9 +105,33 @@
     state.unwrappedHeading = 0;
     state.gammaYawDeg = 0;
     state.headingMode = true;
+    state.stuckPitchFrames = 0;
   }
 
-  /** 縦画面 — v13 trackOrientation そのまま */
+  function resetLandscapePitchBase(state, displayPitch, base) {
+    if (state.fPitch != null) state.initPitch = state.fPitch;
+    if (base) base.viewPitch = displayPitch;
+    state.stuckPitchFrames = 0;
+  }
+
+  function trackYawFromHeading(heading, state) {
+    var yawOff = 0;
+    if (heading != null && state.prevHeading != null) {
+      var hStep = heading - state.prevHeading;
+      if (hStep > 180) hStep -= 360;
+      if (hStep < -180) hStep += 360;
+      if (Math.abs(hStep) <= HEADING_SPIKE_DEG) {
+        state.unwrappedHeading += hStep;
+        state.prevHeading = heading;
+      }
+      if (state.initHeading != null) {
+        yawOff = degToRad(state.unwrappedHeading - state.initHeading);
+        state.headingMode = true;
+      }
+    }
+    return yawOff;
+  }
+
   function trackPortrait(rawEvent, state) {
     if (rawEvent.beta == null) return null;
 
@@ -104,24 +149,12 @@
     }
 
     state.fBeta = lp(state.fBeta, rawEvent.beta, SENSOR_LP);
-    var pitchOff = degToRad(state.initBeta - state.fBeta);
+    var pitchOff = clamp(degToRad(state.initBeta - state.fBeta), -MAX_PITCH_OFF, MAX_PITCH_OFF);
 
     var heading = readHeadingDegPortrait(rawEvent);
-    var yawOff = 0;
+    var yawOff = trackYawFromHeading(heading, state);
 
-    if (heading != null && state.prevHeading != null) {
-      var hStep = heading - state.prevHeading;
-      if (hStep > 180) hStep -= 360;
-      if (hStep < -180) hStep += 360;
-      if (Math.abs(hStep) <= HEADING_SPIKE_DEG) {
-        state.unwrappedHeading += hStep;
-        state.prevHeading = heading;
-      }
-      if (state.initHeading != null) {
-        yawOff = degToRad(state.unwrappedHeading - state.initHeading);
-        state.headingMode = true;
-      }
-    } else if (rawEvent.gamma != null && state.initGamma != null) {
+    if (heading == null && rawEvent.gamma != null && state.initGamma != null) {
       state.fGamma = lp(state.fGamma, rawEvent.gamma, SENSOR_LP);
       state.gammaYawDeg = state.fGamma - state.initGamma;
       yawOff = degToRad(state.gammaYawDeg);
@@ -131,13 +164,13 @@
     return { ready: true, yawOff: yawOff, pitchOff: pitchOff, headingMode: state.headingMode };
   }
 
-  /** 横画面 — 左右=補正コンパス、上下=生 beta（左右操作中は上下を止める） */
   function trackLandscape(rawEvent, screenAngleDeg, state) {
-    if (rawEvent.beta == null) return null;
+    var pitchSample = landscapePitchSampleRad(rawEvent);
+    if (pitchSample == null) return null;
 
-    if (state.initBeta == null) {
-      state.initBeta = rawEvent.beta;
-      state.fBeta = rawEvent.beta;
+    if (state.initPitch == null) {
+      state.initPitch = pitchSample;
+      state.fPitch = pitchSample;
       state.initGamma = rawEvent.gamma;
       state.fGamma = rawEvent.gamma;
       state.prevHeading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
@@ -148,38 +181,18 @@
       return { ready: false };
     }
 
-    var heading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
-    var yawOff = 0;
-    var hStepAbs = 0;
+    state.fPitch = lp(state.fPitch, pitchSample, SENSOR_LP);
+    var pitchOff = clamp(state.initPitch - state.fPitch, -MAX_PITCH_OFF, MAX_PITCH_OFF);
 
-    if (heading != null && state.prevHeading != null) {
-      var hStep = heading - state.prevHeading;
-      if (hStep > 180) hStep -= 360;
-      if (hStep < -180) hStep += 360;
-      hStepAbs = Math.abs(hStep);
-      if (Math.abs(hStep) <= HEADING_SPIKE_DEG) {
-        state.unwrappedHeading += hStep;
-        state.prevHeading = heading;
-      }
-      if (state.initHeading != null) {
-        yawOff = degToRad(state.unwrappedHeading - state.initHeading);
-        state.headingMode = true;
-      }
-    } else if (rawEvent.gamma != null && state.initGamma != null) {
+    var heading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
+    var yawOff = trackYawFromHeading(heading, state);
+
+    if (heading == null && rawEvent.gamma != null && state.initGamma != null) {
       state.fGamma = lp(state.fGamma, rawEvent.gamma, SENSOR_LP);
       state.gammaYawDeg = state.fGamma - state.initGamma;
       yawOff = degToRad(state.gammaYawDeg);
       state.headingMode = false;
     }
-
-    if (hStepAbs <= LANDSCAPE_YAW_FREEZE_PITCH_DEG) {
-      state.fBeta = lp(state.fBeta, rawEvent.beta, SENSOR_LP);
-    }
-    var pitchOff = clamp(
-      degToRad(state.initBeta - state.fBeta),
-      -Math.PI / 2.2,
-      Math.PI / 2.2
-    );
 
     return { ready: true, yawOff: yawOff, pitchOff: pitchOff, headingMode: state.headingMode };
   }
@@ -288,6 +301,8 @@
     this.orientState = {
       initBeta: null,
       fBeta: null,
+      initPitch: null,
+      fPitch: null,
       initGamma: null,
       fGamma: null,
       prevHeading: null,
@@ -296,7 +311,8 @@
       gammaYawDeg: 0,
       headingMode: true,
       lastScreenAngle: getScreenAngleDeg(),
-      lastTrackMode: null
+      lastTrackMode: null,
+      stuckPitchFrames: 0
     };
 
     this._bindOrientation();
@@ -318,6 +334,17 @@
         self.orientState.lastTrackMode = trackMode;
         self._recalibrateForScreenRotate();
         return;
+      }
+
+      if (!portrait) {
+        if (Math.abs(self.displayPitch) >= STUCK_PITCH_LIMIT) {
+          self.orientState.stuckPitchFrames++;
+        } else {
+          self.orientState.stuckPitchFrames = 0;
+        }
+        if (self.orientState.stuckPitchFrames >= STUCK_PITCH_FRAMES) {
+          resetLandscapePitchBase(self.orientState, self.displayPitch, self.base);
+        }
       }
 
       var o = portrait
