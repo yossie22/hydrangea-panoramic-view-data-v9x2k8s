@@ -1,9 +1,9 @@
 /**
- * パノラマ用ジャイロ制御 v40
+ * パノラマ用ジャイロ制御 v41
  * 縦画面: v13 ベース（左右=コンパス）
- * 横画面: 左右=gamma、上下=クォータニオン
- * v40: 横の左右をコンパスから変更（90°ずれ防止）、固定タイミング修正
- * 詳細: vendor/gyro-STABLE-v40.txt
+ * 横画面: 左右=コンパス、上下=クォータニオン
+ * v41: 横左右をコンパスに戻す、上下時のyずれ防止、切替中画面固定強化
+ * 詳細: vendor/gyro-STABLE-v41.txt
  */
 (function(global) {
   'use strict';
@@ -22,11 +22,12 @@
   var LANDSCAPE_PITCH_UP = Math.PI * 82 / 180;
   var LANDSCAPE_PITCH_DOWN = Math.PI * 82 / 180;
   var LANDSCAPE_YAW_IGNORE_PITCH = 0.45;
+  var LANDSCAPE_PITCH_YAW_DECOUPLE = 0.04;
   var LANDSCAPE_CALIB_FRAMES = 6;
   var SWITCH_SETTLE_FRAMES = 45;
-  var SWITCH_STABLE_FRAMES = 25;
+  var SWITCH_STABLE_FRAMES = 40;
   var ROTATE_BETA_JUMP_DEG = 10;
-  var BUILD = 'v40';
+  var BUILD = 'v41';
 
   function isLandscapeAngleDeg(screenAngleDeg) {
     var a = Math.round(normalizeAngle360(screenAngleDeg));
@@ -356,7 +357,7 @@
   }
 
   /**
-   * 横画面: 左右=gamma（切替でずれにくい）、上下=クォータニオン
+   * 横画面: 左右=コンパス、上下=クォータニオン
    */
   function trackLandscape(rawEvent, screenAngleDeg, state) {
     var qCurr = deviceQuatLandscape(rawEvent, screenAngleDeg);
@@ -383,6 +384,7 @@
       return { ready: false };
     }
 
+    var heading = readHeadingDegLandscape(rawEvent, screenAngleDeg);
     var yawOff = 0;
     var pitchOff = 0;
 
@@ -392,22 +394,28 @@
       state.fGamma = rawEvent.gamma;
       state.gammaYawDeg = 0;
       state.landscapeReady = true;
+      syncHeadingBaseline(state, heading);
       beginSwitchStable(state);
       state.lastPitchOff = 0;
       yawOff = 0;
       pitchOff = 0;
     } else {
-      if (rawEvent.gamma != null && state.initGamma != null) {
-        state.fGamma = lp(state.fGamma, rawEvent.gamma, SENSOR_LP);
-        state.gammaYawDeg = state.fGamma - state.initGamma;
-        yawOff = degToRad(state.gammaYawDeg);
-        state.headingMode = false;
-      }
       pitchOff = clamp(
         relativePitchFromQuat(state.qInit, qCurr) * landscapePitchSign(),
         -LANDSCAPE_PITCH_DOWN,
         LANDSCAPE_PITCH_UP
       );
+      if (Math.abs(pitchOff - state.lastPitchOff) > LANDSCAPE_PITCH_YAW_DECOUPLE) {
+        syncHeadingBaseline(state, heading);
+        yawOff = 0;
+      } else if (heading == null && rawEvent.gamma != null && state.initGamma != null) {
+        state.fGamma = lp(state.fGamma, rawEvent.gamma, SENSOR_LP);
+        state.gammaYawDeg = state.fGamma - state.initGamma;
+        yawOff = degToRad(state.gammaYawDeg);
+        state.headingMode = false;
+      } else {
+        yawOff = trackYawFromHeading(heading, state);
+      }
       state.lastPitchOff = pitchOff;
     }
 
@@ -570,7 +578,9 @@
         ? trackPortrait(self.latestEvent, self.orientState)
         : trackLandscape(self.latestEvent, screenAngle, self.orientState);
 
-      if (self.orientState.settleFrames > 0 || self.orientState.switchStableFrames > 0) {
+      if (self.orientState.settleFrames > 0 ||
+          self.orientState.switchStableFrames > 0 ||
+          self.orientState.pendingStable) {
         self.displayYaw = self.base.viewYaw;
         self.displayPitch = self.base.viewPitch;
         v.setYaw(self.displayYaw);
