@@ -1,7 +1,7 @@
 /**
- * パノラマ用ジャイロ制御 v58
- * 縦=水平補正あり / 横=センサーのみ（CSS回転なし）
- * 詳細: vendor/gyro-STABLE-v58.txt
+ * パノラマ用ジャイロ制御 v59
+ * 縦＋右回転横のみ / ロール補正なし
+ * 詳細: vendor/gyro-STABLE-v59.txt
  */
 (function(global) {
   'use strict';
@@ -13,17 +13,13 @@
   var HEADING_SPIKE_DEG = 55;
   var HEADING_LP = 0.11;
   var SENSOR_LP = 0.09;
-  var ROLL_LP = 0.07;
-  var ROLL_SMOOTH = 0.09;
-  var ROLL_DEADZONE_DEG = 4.0;
-  var ROLL_MAX_COVER_DEG = 22;
-  var PITCH_ZENITH_START = Math.PI * 58 / 180;
-  var PITCH_ZENITH_END = Math.PI * 74 / 180;
   var MAX_PITCH_UP = Math.PI * 78 / 180;
   var MAX_PITCH_DOWN = Math.PI * 78 / 180;
+  var PITCH_ZENITH_START = Math.PI * 58 / 180;
+  var PITCH_ZENITH_END = Math.PI * 74 / 180;
   var TRACK_WARMUP_FRAMES = 18;
   var GRAVITY_MIN = 4;
-  var BUILD = 'v58';
+  var BUILD = 'v59';
 
   var SCREEN_FORWARD = { x: 0, y: 0, z: -1 };
 
@@ -225,17 +221,17 @@
     return clamp(k * err, -maxStep, maxStep);
   }
 
+  function isAllowedScreenCur(cur) {
+    var c = normalizeAngle360(cur);
+    return c === 0 || c === 90;
+  }
+
   function resetSensorBaselineOnLayout(gyro) {
     var st = gyro.orientState;
     if (!st || !st.trackingReady) return;
     st.trackingReady = false;
     st.initPitch = null;
     st.warmup = Math.max(0, TRACK_WARMUP_FRAMES - 6);
-    if (gyro.visual) {
-      gyro.visual.initRoll = null;
-      gyro.visual.fRoll = null;
-      gyro.visual.fRollDeg = 0;
-    }
   }
 
   function snapScreenAngleDeg(deg, prev) {
@@ -273,13 +269,10 @@
     this.panoEl = panoEl;
     this.getViewer = getViewer;
     this.lockAngle = null;
-    this.initRoll = null;
-    this.fRoll = null;
     this.saved = null;
     this.lastLayoutKey = '';
     this.snappedCur = null;
     this.prevSnappedCur = null;
-    this.fRollDeg = null;
   }
 
   VisualImmersive.prototype.getDelta = function() {
@@ -290,18 +283,17 @@
     return delta;
   };
 
-  VisualImmersive.prototype.start = function(motion, rawEvent) {
+  VisualImmersive.prototype.getSensorRemapDelta = function() {
+    return this.snappedCur === 90 ? 90 : 0;
+  };
+
+  VisualImmersive.prototype.start = function() {
     if (!this.panoEl) return;
     var el = this.panoEl;
     var startAngle = normalizeAngle360(getScreenAngleDeg());
     this.lockAngle = snapScreenAngleDeg(startAngle, null);
     this.snappedCur = this.lockAngle;
     this.prevSnappedCur = this.lockAngle;
-    var screenDelta = this.getDelta();
-    var roll = rollFromGravity(motion, rawEvent, screenDelta);
-    this.initRoll = roll != null ? roll : 0;
-    this.fRoll = this.initRoll;
-    this.fRollDeg = 0;
     this.saved = {
       width: el.style.width,
       height: el.style.height,
@@ -311,7 +303,7 @@
       transformOrigin: el.style.transformOrigin
     };
     this.lastLayoutKey = '';
-    this.apply(getScreenAngleDeg(), motion, rawEvent);
+    this.apply(getScreenAngleDeg());
   };
 
   VisualImmersive.prototype.stop = function() {
@@ -325,13 +317,10 @@
     el.style.transform = s.transform;
     el.style.transformOrigin = s.transformOrigin;
     this.lockAngle = null;
-    this.initRoll = null;
-    this.fRoll = null;
     this.saved = null;
     this.lastLayoutKey = '';
     this.snappedCur = null;
     this.prevSnappedCur = null;
-    this.fRollDeg = null;
     this._updateViewerSize();
   };
 
@@ -352,70 +341,20 @@
     }
   };
 
-  VisualImmersive.prototype.apply = function(screenAngleDeg, motion, rawEvent) {
+  VisualImmersive.prototype.apply = function(screenAngleDeg) {
     if (!this.panoEl || this.lockAngle == null) return;
     var el = this.panoEl;
     var rawCur = normalizeAngle360(screenAngleDeg);
     this.snappedCur = snapScreenAngleDeg(rawCur, this.snappedCur);
-    var cur = this.snappedCur;
-    var delta = cur - this.lockAngle;
-    if (delta > 180) delta -= 360;
-    if (delta < -180) delta += 360;
-    var screenDelta = delta;
-
-    var roll = rollFromGravity(motion, rawEvent, screenDelta);
-    if (roll != null) {
-      this.fRoll = lp(this.fRoll, roll, ROLL_LP);
-    }
-    var rollOff = (this.fRoll != null && this.initRoll != null)
-      ? this.fRoll - this.initRoll
-      : 0;
-    var rollDeg = 0;
-    if (Math.abs(radToDeg(rollOff)) >= ROLL_DEADZONE_DEG &&
-        Math.abs(Math.round(delta)) !== 180) {
-      rollDeg = -radToDeg(rollOff);
-    }
-    this.fRollDeg = lp(this.fRollDeg, rollDeg, ROLL_SMOOTH);
-    if (this.fRollDeg == null) this.fRollDeg = rollDeg;
-
-    var absD = Math.abs(Math.round(delta));
-
     var vw = global.innerWidth || document.documentElement.clientWidth;
     var vh = global.innerHeight || document.documentElement.clientHeight;
-    var layoutKey = cur + ':' + vw + 'x' + vh;
-
-    if (absD === 90) {
-      el.style.width = '100%';
-      el.style.height = '100%';
-      el.style.left = '0';
-      el.style.top = '0';
-      el.style.transform = '';
-      el.style.transformOrigin = '';
-      if (layoutKey !== this.lastLayoutKey) {
-        this.lastLayoutKey = layoutKey;
-        this._updateViewerSize();
-      }
-      return;
-    }
-
+    var layoutKey = this.snappedCur + ':' + vw + 'x' + vh;
     el.style.width = '100%';
     el.style.height = '100%';
     el.style.left = '0';
     el.style.top = '0';
-
-    if (absD === 180) {
-      el.style.transformOrigin = 'center center';
-      el.style.transform = 'rotate(180deg)';
-      if (layoutKey !== this.lastLayoutKey) {
-        this.lastLayoutKey = layoutKey;
-        this._updateViewerSize();
-      }
-      return;
-    }
-
-    var scale = coverScaleForRotate(vw, vh, ROLL_MAX_COVER_DEG) * 1.04;
-    el.style.transformOrigin = 'center center';
-    el.style.transform = 'rotate(' + this.fRollDeg + 'deg) scale(' + scale + ')';
+    el.style.transform = '';
+    el.style.transformOrigin = '';
     if (layoutKey !== this.lastLayoutKey) {
       this.lastLayoutKey = layoutKey;
       this._updateViewerSize();
@@ -438,9 +377,23 @@
     this.visual = null;
     this.displayYaw = 0;
     this.displayPitch = 0;
+    this.hintText = '';
   }
 
   GyroControl.BUILD = BUILD;
+
+  GyroControl.isOrientationAllowed = function(cur) {
+    return isAllowedScreenCur(cur);
+  };
+
+  GyroControl.prototype.getHint = function() {
+    return this.hintText || '';
+  };
+
+  GyroControl.prototype._rejectOrientation = function(msg) {
+    this.hintText = msg || '右回転の横か縦へ';
+    this.stop();
+  };
 
   GyroControl.prototype.setOnChange = function(fn) {
     this.onChange = fn;
@@ -468,7 +421,11 @@
 
   GyroControl.prototype._onLayoutChange = function() {
     if (!this.enabled || !this.visual) return;
-    this.visual.apply(getScreenAngleDeg(), this.latestMotion, this.latestEvent);
+    this.visual.apply(getScreenAngleDeg());
+    if (this.visual.snappedCur != null &&
+        !GyroControl.isOrientationAllowed(this.visual.snappedCur)) {
+      this._rejectOrientation('左横は使えません');
+    }
   };
 
   GyroControl.prototype._cleanupListeners = function() {
@@ -532,6 +489,12 @@
   GyroControl.prototype.start = function() {
     var view = this.getView();
     if (!view) return false;
+    var cur = snapScreenAngleDeg(normalizeAngle360(getScreenAngleDeg()), null);
+    if (!GyroControl.isOrientationAllowed(cur)) {
+      this.hintText = '縦か右回転の横でON';
+      return false;
+    }
+    this.hintText = '';
     var wasOn = this.enabled;
     this._cleanupListeners();
     this.enabled = true;
@@ -563,12 +526,17 @@
       if (!v || !self.latestEvent || !self.orientState || !self.base) return;
 
       if (self.visual && self.orientState.warmup === 0 && !self.visual.lockAngle) {
-        self.visual.start(self.latestMotion, self.latestEvent);
+        self.visual.start();
       }
 
       if (self.visual && self.visual.lockAngle != null) {
         var prevCur = self.visual.prevSnappedCur;
-        self.visual.apply(getScreenAngleDeg(), self.latestMotion, self.latestEvent);
+        self.visual.apply(getScreenAngleDeg());
+        if (self.visual.snappedCur != null &&
+            !GyroControl.isOrientationAllowed(self.visual.snappedCur)) {
+          self._rejectOrientation('左横は使えません');
+          return;
+        }
         if (prevCur != null && self.visual.snappedCur != null &&
             prevCur !== self.visual.snappedCur) {
           resetSensorBaselineOnLayout(self);
@@ -576,7 +544,7 @@
         self.visual.prevSnappedCur = self.visual.snappedCur;
       }
 
-      var screenDelta = self.visual ? self.visual.getDelta() : 0;
+      var screenDelta = self.visual ? self.visual.getSensorRemapDelta() : 0;
       var o = trackUnified(self.latestEvent, self.latestMotion, self.orientState, screenDelta);
 
       if (!o || !o.ready) return;
