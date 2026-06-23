@@ -1,8 +1,8 @@
 /**
- * パノラマ用ジャイロ制御 v45
- * 水平線優先：左右=コンパス(v13)、上下=重力基準の向き(クォータニオン)
- * 縦横切替で基準リセットなし。alpha は端末値、コンパスは左右専用。
- * 詳細: vendor/gyro-STABLE-v45.txt
+ * パノラマ用ジャイロ制御 v46
+ * 水平線優先：左右=コンパス(v13)、上下=重力ベクトル（ロールの影響なし）
+ * 縦横切替で基準リセットなし
+ * 詳細: vendor/gyro-STABLE-v46.txt
  */
 (function(global) {
   'use strict';
@@ -12,11 +12,11 @@
   var PITCH_MAX_STEP = 0.032;
   var YAW_MAX_STEP = 0.040;
   var HEADING_SPIKE_DEG = 55;
-  var SENSOR_LP = 0.22;
   var MAX_PITCH_UP = Math.PI * 82 / 180;
   var MAX_PITCH_DOWN = Math.PI * 82 / 180;
   var TRACK_WARMUP_FRAMES = 12;
-  var BUILD = 'v45';
+  var GRAVITY_MIN = 4;
+  var BUILD = 'v46';
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -28,9 +28,6 @@
   function angleDelta(from, to) {
     return normalizeAngle(to - from);
   }
-  function lp(prev, next, k) {
-    return prev == null ? next : prev + k * (next - prev);
-  }
 
   function getScreenAngleDeg() {
     if (global.screen && global.screen.orientation &&
@@ -41,78 +38,42 @@
     return 0;
   }
 
-  function qNormalize(q) {
-    var len = Math.sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
-    if (len < 1e-8) return { w: 1, x: 0, y: 0, z: 0 };
-    return { w: q.w / len, x: q.x / len, y: q.y / len, z: q.z / len };
-  }
-
-  function qMul(a, b) {
-    return qNormalize({
-      w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-      x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-      y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-      z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w
-    });
-  }
-
-  function qFromAxisAngle(ax, ay, az, angleRad) {
-    var half = angleRad * 0.5;
-    var s = Math.sin(half);
-    return qNormalize({
-      w: Math.cos(half),
-      x: ax * s,
-      y: ay * s,
-      z: az * s
-    });
-  }
-
-  /** THREE.js DeviceOrientationControls と同じ */
-  function setObjectQuaternion(alpha, beta, gamma, orientRad) {
-    var c1 = Math.cos(beta * 0.5);
-    var s1 = Math.sin(beta * 0.5);
-    var c2 = Math.cos(alpha * 0.5);
-    var s2 = Math.sin(alpha * 0.5);
-    var c3 = Math.cos(-gamma * 0.5);
-    var s3 = Math.sin(-gamma * 0.5);
-    var q = qNormalize({
-      w: c1 * c2 * c3 + s1 * s2 * s3,
-      x: s1 * c2 * c3 + c1 * s2 * s3,
-      y: c1 * s2 * c3 - s1 * c2 * s3,
-      z: c1 * c2 * s3 - s1 * s2 * c3
-    });
-    var qFix = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
-    var qScreen = qFromAxisAngle(0, 0, 1, -orientRad);
-    return qMul(qMul(q, qFix), qScreen);
-  }
-
-  function quatRotateVec(q, x, y, z) {
-    var qx = q.x;
-    var qy = q.y;
-    var qz = q.z;
-    var qw = q.w;
-    var ix = qw * x + qy * z - qz * y;
-    var iy = qw * y + qz * x - qx * z;
-    var iz = qw * z + qx * y - qy * x;
-    var iw = -qx * x - qy * y - qz * z;
+  /** 画面の向き（端末座標系） */
+  function screenForwardDevice(screenAngleDeg) {
+    var a = degToRad(screenAngleDeg);
     return {
-      x: ix * qw + iw * -qx + iy * -qz - iz * -qy,
-      y: iy * qw + iw * -qy + iz * -qx - ix * -qz,
-      z: iz * qw + iw * -qz + ix * -qy - iy * -qx
+      x: -Math.sin(a),
+      y: 0,
+      z: -Math.cos(a)
     };
   }
 
-  /** 画面が向いている方向の仰角（重力基準・ロールの影響を抑える） */
-  function lookElevationRad(rawEvent, screenAngleDeg) {
+  /** 重力から仰角（端末を横に傾けても水平線がずれにくい） */
+  function pitchFromGravityRad(gx, gy, gz, screenAngleDeg) {
+    var len = Math.sqrt(gx * gx + gy * gy + gz * gz);
+    if (len < GRAVITY_MIN) return null;
+    var ux = -gx / len;
+    var uy = -gy / len;
+    var uz = -gz / len;
+    var f = screenForwardDevice(screenAngleDeg);
+    var dot = clamp(f.x * ux + f.y * uy + f.z * uz, -1, 1);
+    return Math.asin(dot);
+  }
+
+  /** beta/gamma から重力を近似（devicemotion が無いとき） */
+  function gravityFromEuler(rawEvent) {
     if (rawEvent.beta == null || rawEvent.gamma == null) return null;
-    var alpha = rawEvent.alpha != null && !isNaN(rawEvent.alpha) ? degToRad(rawEvent.alpha) : 0;
-    var beta = degToRad(rawEvent.beta);
-    var gamma = degToRad(rawEvent.gamma);
-    var q = setObjectQuaternion(alpha, beta, gamma, degToRad(screenAngleDeg));
-    var look = quatRotateVec(q, 0, 0, -1);
-    var horiz = Math.sqrt(look.x * look.x + look.z * look.z);
-    if (horiz < 1e-6) return look.y > 0 ? Math.PI / 2 : -Math.PI / 2;
-    return Math.atan2(look.y, horiz);
+    var b = degToRad(rawEvent.beta);
+    var g = degToRad(rawEvent.gamma);
+    var cb = Math.cos(b);
+    var sb = Math.sin(b);
+    var cg = Math.cos(g);
+    var sg = Math.sin(g);
+    return {
+      x: -sb * cg,
+      y: -cb,
+      z: sb * sg
+    };
   }
 
   function readHeadingDeg(rawEvent) {
@@ -149,9 +110,18 @@
     return yawOff;
   }
 
-  function trackUnified(rawEvent, screenAngleDeg, state) {
-    var elev = lookElevationRad(rawEvent, screenAngleDeg);
-    if (elev == null) return null;
+  function resolvePitchRad(rawEvent, motion, screenAngleDeg) {
+    if (motion && motion.x != null && motion.y != null && motion.z != null) {
+      return pitchFromGravityRad(motion.x, motion.y, motion.z, screenAngleDeg);
+    }
+    var g = gravityFromEuler(rawEvent);
+    if (!g) return null;
+    return pitchFromGravityRad(g.x, g.y, g.z, screenAngleDeg);
+  }
+
+  function trackUnified(rawEvent, motion, screenAngleDeg, state) {
+    var pitchSample = resolvePitchRad(rawEvent, motion, screenAngleDeg);
+    if (pitchSample == null) return null;
 
     if (state.warmup < TRACK_WARMUP_FRAMES) {
       state.warmup += 1;
@@ -161,7 +131,7 @@
     var heading = readHeadingDeg(rawEvent);
 
     if (!state.trackingReady) {
-      state.initElevation = elev;
+      state.initPitch = pitchSample;
       syncHeadingBaseline(state, heading);
       state.trackingReady = true;
       return {
@@ -174,7 +144,7 @@
     }
 
     var pitchOff = clamp(
-      elev - state.initElevation,
+      pitchSample - state.initPitch,
       -MAX_PITCH_DOWN,
       MAX_PITCH_UP
     );
@@ -195,6 +165,7 @@
     this.handlers = [];
     this.raf = null;
     this.latestEvent = null;
+    this.latestMotion = null;
     this.base = null;
     this.onChange = null;
     this.hooks = {};
@@ -231,15 +202,24 @@
       this.raf = null;
     }
     this.latestEvent = null;
+    this.latestMotion = null;
   };
 
-  GyroControl.prototype._bindOrientation = function() {
+  GyroControl.prototype._bindSensors = function() {
     var self = this;
-    var sensorFn = function(e) { self.latestEvent = e; };
+    var orientFn = function(e) { self.latestEvent = e; };
     ['deviceorientationabsolute', 'deviceorientation'].forEach(function(type) {
-      global.addEventListener(type, sensorFn, true);
-      self.handlers.push({ type: type, fn: sensorFn, capture: true });
+      global.addEventListener(type, orientFn, true);
+      self.handlers.push({ type: type, fn: orientFn, capture: true });
     });
+    var motionFn = function(e) {
+      var a = e.accelerationIncludingGravity;
+      if (a && a.x != null) {
+        self.latestMotion = { x: a.x, y: a.y, z: a.z };
+      }
+    };
+    global.addEventListener('devicemotion', motionFn, true);
+    self.handlers.push({ type: 'devicemotion', fn: motionFn, capture: true });
   };
 
   GyroControl.prototype.stop = function() {
@@ -267,7 +247,7 @@
 
     var self = this;
     this.orientState = {
-      initElevation: null,
+      initPitch: null,
       initHeading: null,
       prevHeading: null,
       unwrappedHeading: 0,
@@ -275,7 +255,7 @@
       trackingReady: false
     };
 
-    this._bindOrientation();
+    this._bindSensors();
 
     function tick() {
       if (!self.enabled) return;
@@ -285,7 +265,12 @@
       if (!v || !self.latestEvent || !self.orientState || !self.base) return;
 
       var screenAngle = getScreenAngleDeg();
-      var o = trackUnified(self.latestEvent, screenAngle, self.orientState);
+      var o = trackUnified(
+        self.latestEvent,
+        self.latestMotion,
+        screenAngle,
+        self.orientState
+      );
       if (!o || !o.ready) return;
 
       var targetYaw = self.base.viewYaw + o.yawOff;
@@ -314,14 +299,26 @@
 
   GyroControl.prototype.requestStart = function() {
     var self = this;
+    var chain = Promise.resolve('granted');
+
     if (typeof DeviceOrientationEvent !== 'undefined' &&
         typeof DeviceOrientationEvent.requestPermission === 'function') {
-      return DeviceOrientationEvent.requestPermission().then(function(state) {
-        if (state === 'granted') return self.start();
-        return false;
-      }).catch(function() { return false; });
+      chain = chain.then(function() {
+        return DeviceOrientationEvent.requestPermission();
+      });
     }
-    return Promise.resolve(self.start());
+    if (typeof DeviceMotionEvent !== 'undefined' &&
+        typeof DeviceMotionEvent.requestPermission === 'function') {
+      chain = chain.then(function(prev) {
+        if (prev !== 'granted') return prev;
+        return DeviceMotionEvent.requestPermission();
+      });
+    }
+
+    return chain.then(function(state) {
+      if (state === 'granted') return self.start();
+      return false;
+    }).catch(function() { return false; });
   };
 
   GyroControl.prototype.toggle = function() {
