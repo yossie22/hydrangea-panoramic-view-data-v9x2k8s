@@ -1,7 +1,7 @@
 /**
- * パノラマ用ジャイロ制御 v49
+ * パノラマ用ジャイロ制御 v50
  * 没入モード：重力+コンパス、CSS逆回転で水平・切替抑制
- * 詳細: vendor/gyro-STABLE-v49.txt
+ * 詳細: vendor/gyro-STABLE-v50.txt
  */
 (function(global) {
   'use strict';
@@ -17,7 +17,7 @@
   var MAX_PITCH_DOWN = Math.PI * 82 / 180;
   var TRACK_WARMUP_FRAMES = 12;
   var GRAVITY_MIN = 4;
-  var BUILD = 'v49';
+  var BUILD = 'v50';
 
   var SCREEN_FORWARD = { x: 0, y: 0, z: -1 };
 
@@ -176,6 +176,13 @@
     };
   }
 
+  function coverScaleForRotate(w, h, deg) {
+    var rad = deg * Math.PI / 180;
+    var c = Math.abs(Math.cos(rad));
+    var s = Math.abs(Math.sin(rad));
+    return Math.max((w * c + h * s) / w, (w * s + h * c) / h) * 1.02;
+  }
+
   function VisualImmersive(panoEl, getViewer) {
     this.panoEl = panoEl;
     this.getViewer = getViewer;
@@ -255,18 +262,22 @@
     var rollOff = (this.fRoll != null && this.initRoll != null)
       ? this.fRoll - this.initRoll
       : 0;
-    var counterDeg = -delta + radToDeg(rollOff);
+    var counterDeg = -delta - radToDeg(rollOff);
 
     var vw = global.innerWidth || document.documentElement.clientWidth;
     var vh = global.innerHeight || document.documentElement.clientHeight;
     var ad = Math.abs(Math.round(delta));
     var layoutKey = ad + ':' + vw + 'x' + vh;
+    var pw = vw;
+    var ph = vh;
 
     if (ad === 90 || ad === 270) {
-      el.style.width = vh + 'px';
-      el.style.height = vw + 'px';
-      el.style.left = ((vw - vh) / 2) + 'px';
-      el.style.top = ((vh - vw) / 2) + 'px';
+      pw = vh;
+      ph = vw;
+      el.style.width = pw + 'px';
+      el.style.height = ph + 'px';
+      el.style.left = ((vw - pw) / 2) + 'px';
+      el.style.top = ((vh - ph) / 2) + 'px';
     } else {
       el.style.width = '100%';
       el.style.height = '100%';
@@ -274,8 +285,9 @@
       el.style.top = '0';
     }
 
+    var scale = coverScaleForRotate(pw, ph, counterDeg);
     el.style.transformOrigin = 'center center';
-    el.style.transform = 'rotate(' + counterDeg + 'deg)';
+    el.style.transform = 'rotate(' + counterDeg + 'deg) scale(' + scale + ')';
     if (layoutKey !== this.lastLayoutKey) {
       this.lastLayoutKey = layoutKey;
       this._updateViewerSize();
