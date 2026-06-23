@@ -1,9 +1,9 @@
 /**
- * パノラマ用ジャイロ制御 v33
+ * パノラマ用ジャイロ制御 v34
  * 縦画面: v13 ベース（下方向の角度制限を緩和）
  * 横画面: クォータニオン+変化量積み上げ
- * v33: 縦横切替は一定時間すべて止める、基準を切替後に再セット
- * 詳細: vendor/gyro-STABLE-v33.txt
+ * v34: 横の上下符号修正、切替時コンパス基準補正、二重リセット防止
+ * 詳細: vendor/gyro-STABLE-v34.txt
  */
 (function(global) {
   'use strict';
@@ -24,11 +24,11 @@
   var LANDSCAPE_PITCH_DELTA_MAX = Math.PI * 3 / 180;
   var LANDSCAPE_YAW_IGNORE_PITCH = 0.45;
   var LANDSCAPE_CALIB_FRAMES = 6;
-  var LANDSCAPE_PITCH_SIGN = 1;
+  var LANDSCAPE_PITCH_SIGN = -1;
   var SWITCH_SETTLE_FRAMES = 45;
   var ROTATE_BETA_JUMP_DEG = 10;
   var NEAR_LANDSCAPE_TILT_DEG = 28;
-  var BUILD = 'v33';
+  var BUILD = 'v34';
 
   function isLandscapeAngleDeg(screenAngleDeg) {
     var a = Math.round(normalizeAngle360(screenAngleDeg));
@@ -268,6 +268,7 @@
     state.portraitReady = false;
     state.prevRotateBeta = null;
     state.settleFrames = 0;
+    state.switchHoldHeading = null;
   }
 
   function trackYawFromHeading(heading, state) {
@@ -408,6 +409,14 @@
       state.pitchIntegral = 0;
       state.landscapeReady = true;
       syncHeadingBaseline(state, heading);
+      if (state.switchHoldHeading != null && heading != null) {
+        var refJump = heading - state.switchHoldHeading;
+        if (refJump > 180) refJump -= 360;
+        if (refJump < -180) refJump += 360;
+        state.initHeading = normalizeAngle360(heading - refJump);
+        state.unwrappedHeading = state.initHeading;
+      }
+      state.switchHoldHeading = null;
       state.lastPitchOff = 0;
       yawOff = 0;
       pitchOff = 0;
@@ -488,6 +497,10 @@
 
   GyroControl.prototype._recalibrateForScreenRotate = function() {
     var view = this.getView();
+    var holdHeading = null;
+    if (this.latestEvent) {
+      holdHeading = readHeadingDegPortrait(this.latestEvent);
+    }
     if (view) {
       this.displayYaw = view.yaw();
       this.displayPitch = view.pitch();
@@ -499,7 +512,11 @@
       this.base.viewPitch = this.displayPitch;
     }
     if (this.orientState) {
+      if (this.orientState.settleFrames > 0) return;
       resetOrientState(this.orientState);
+      if (holdHeading != null) {
+        this.orientState.switchHoldHeading = holdHeading;
+      }
       this.orientState.settleFrames = SWITCH_SETTLE_FRAMES;
     }
     if (view) {
@@ -515,22 +532,6 @@
       global.addEventListener(type, sensorFn, true);
       self.handlers.push({ type: type, fn: sensorFn, capture: true });
     });
-
-    var rotateFn = function() {
-      if (!self.enabled) return;
-      self._recalibrateForScreenRotate();
-    };
-    global.addEventListener('orientationchange', rotateFn);
-    self.handlers.push({ type: 'orientationchange', fn: rotateFn, capture: false });
-    if (global.screen && global.screen.orientation &&
-        typeof global.screen.orientation.addEventListener === 'function') {
-      global.screen.orientation.addEventListener('change', rotateFn);
-      self.handlers.push({
-        type: 'change',
-        fn: rotateFn,
-        target: global.screen.orientation
-      });
-    }
   };
 
   GyroControl.prototype.stop = function() {
@@ -579,7 +580,8 @@
       lastPitchOff: 0,
       portraitReady: false,
       prevRotateBeta: null,
-      settleFrames: 0
+      settleFrames: 0,
+      switchHoldHeading: null
     };
 
     this._bindOrientation();
