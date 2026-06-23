@@ -1,8 +1,8 @@
 /**
- * パノラマ用ジャイロ制御 v43
- * 統一クォータニオン方式（THETA 型：水平線を世界基準で維持）
- * 縦横切替で基準リセットしない。画面角度は毎フレーム補正。
- * 詳細: vendor/gyro-STABLE-v43.txt
+ * パノラマ用ジャイロ制御 v44
+ * 統一クォータニオン（THREE.js DeviceOrientation 方式）
+ * 縦横切替で基準リセットなし。水平線を世界基準で維持。
+ * 詳細: vendor/gyro-STABLE-v44.txt
  */
 (function(global) {
   'use strict';
@@ -11,13 +11,10 @@
   var YAW_SMOOTH = 0.22;
   var PITCH_MAX_STEP = 0.032;
   var YAW_MAX_STEP = 0.040;
-  var SENSOR_LP = 0.22;
   var MAX_PITCH_UP = Math.PI * 82 / 180;
   var MAX_PITCH_DOWN = Math.PI * 82 / 180;
-  var TRACK_WARMUP_FRAMES = 10;
-  var TRACK_YAW_SIGN = -1;
-  var TRACK_PITCH_SIGN = -1;
-  var BUILD = 'v43';
+  var TRACK_WARMUP_FRAMES = 15;
+  var BUILD = 'v44';
 
   function degToRad(d) { return d * Math.PI / 180; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -28,11 +25,6 @@
   }
   function angleDelta(from, to) {
     return normalizeAngle(to - from);
-  }
-  function normalizeAngle360(d) {
-    d = d % 360;
-    if (d < 0) d += 360;
-    return d;
   }
 
   function getScreenAngleDeg() {
@@ -74,68 +66,56 @@
     });
   }
 
-  function deviceEulerToQuat(alphaDeg, betaDeg, gammaDeg) {
-    if (betaDeg == null || gammaDeg == null) return null;
-    if (isNaN(betaDeg) || isNaN(gammaDeg)) return null;
-    if (alphaDeg == null || isNaN(alphaDeg)) alphaDeg = 0;
-    var a = degToRad(alphaDeg);
-    var b = degToRad(betaDeg);
-    var g = degToRad(gammaDeg);
-    var cA = Math.cos(a * 0.5);
-    var sA = Math.sin(a * 0.5);
-    var cB = Math.cos(b * 0.5);
-    var sB = Math.sin(b * 0.5);
-    var cG = Math.cos(g * 0.5);
-    var sG = Math.sin(g * 0.5);
+  /** THREE.js DeviceOrientationControls と同じ順序 */
+  function eulerYXZToQuat(beta, alpha, negGamma) {
+    var c1 = Math.cos(beta * 0.5);
+    var s1 = Math.sin(beta * 0.5);
+    var c2 = Math.cos(alpha * 0.5);
+    var s2 = Math.sin(alpha * 0.5);
+    var c3 = Math.cos(negGamma * 0.5);
+    var s3 = Math.sin(negGamma * 0.5);
     return qNormalize({
-      w: cA * cB * cG - sA * sB * sG,
-      x: sA * sB * cG + cA * cB * sG,
-      y: sA * cB * cG + cA * sB * sG,
-      z: cA * sB * cG - sA * cB * sG
+      w: c1 * c2 * c3 + s1 * s2 * s3,
+      x: s1 * c2 * c3 + c1 * s2 * s3,
+      y: c1 * s2 * c3 - s1 * c2 * s3,
+      z: c1 * c2 * s3 - s1 * s2 * c3
     });
   }
 
-  /** 画面回転を毎フレーム補正（縦横で基準を変えない） */
-  function deviceQuatWorld(rawEvent, screenAngleDeg) {
-    var q = deviceEulerToQuat(rawEvent.alpha, rawEvent.beta, rawEvent.gamma);
-    if (!q) return null;
-    var qDeviceFix = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
+  function alphaRad(rawEvent) {
+    if (typeof rawEvent.webkitCompassHeading === 'number' &&
+        !isNaN(rawEvent.webkitCompassHeading)) {
+      return degToRad(rawEvent.webkitCompassHeading);
+    }
+    if (rawEvent.alpha != null && !isNaN(rawEvent.alpha)) {
+      return degToRad(rawEvent.alpha);
+    }
+    return 0;
+  }
+
+  /** 画面角度を毎フレーム補正（縦横で基準を変えない） */
+  function buildDeviceQuaternion(rawEvent, screenAngleDeg) {
+    if (rawEvent.beta == null || rawEvent.gamma == null) return null;
+    var beta = degToRad(rawEvent.beta);
+    var gamma = degToRad(rawEvent.gamma);
+    var alpha = alphaRad(rawEvent);
+    var q = eulerYXZToQuat(beta, alpha, -gamma);
+    var qFix = qFromAxisAngle(1, 0, 0, -Math.PI / 2);
     var qScreen = qFromAxisAngle(0, 0, 1, -degToRad(screenAngleDeg));
-    return qMul(qScreen, qMul(qDeviceFix, q));
+    return qMul(qMul(q, qFix), qScreen);
   }
 
-  function quatRotateVec(q, x, y, z) {
-    var qx = q.x;
-    var qy = q.y;
-    var qz = q.z;
-    var qw = q.w;
-    var ix = qw * x + qy * z - qz * y;
-    var iy = qw * y + qz * x - qx * z;
-    var iz = qw * z + qx * y - qy * x;
-    var iw = -qx * x - qy * y - qz * z;
-    return {
-      x: ix * qw + iw * -qx + iy * -qz - iz * -qy,
-      y: iy * qw + iw * -qy + iz * -qx - ix * -qz,
-      z: iz * qw + iw * -qz + ix * -qy - iy * -qx
-    };
-  }
-
-  function offsetsFromRelQuat(qRel) {
-    var look = quatRotateVec(qRel, 0, 0, -1);
-    var horiz = Math.sqrt(look.x * look.x + look.z * look.z);
-    var yawOff = Math.atan2(look.x, look.z) * TRACK_YAW_SIGN;
-    var pitchOff = Math.atan2(look.y, horiz) * TRACK_PITCH_SIGN;
-    return { yawOff: yawOff, pitchOff: pitchOff };
-  }
-
-  function resetTrackState(state) {
-    state.qInit = null;
-    state.qWarmup = 0;
-    state.trackingReady = false;
+  function quatToYawPitch(q) {
+    var sinp = 2 * (q.w * q.x - q.y * q.z);
+    var pitch = Math.asin(clamp(sinp, -1, 1));
+    var siny = 2 * (q.w * q.y + q.x * q.z);
+    var cosy = 1 - 2 * (q.x * q.x + q.y * q.y);
+    var yaw = Math.atan2(siny, cosy);
+    return { yaw: yaw, pitch: pitch };
   }
 
   function trackUnified(rawEvent, screenAngleDeg, state) {
-    var qCurr = deviceQuatWorld(rawEvent, screenAngleDeg);
+    var qCurr = buildDeviceQuaternion(rawEvent, screenAngleDeg);
     if (!qCurr) return null;
 
     if (state.qWarmup < TRACK_WARMUP_FRAMES) {
@@ -156,11 +136,11 @@
     }
 
     var qRel = qMul(qConj(state.qInit), qCurr);
-    var off = offsetsFromRelQuat(qRel);
+    var yp = quatToYawPitch(qRel);
     return {
       ready: true,
-      yawOff: clamp(off.yawOff, -Math.PI, Math.PI),
-      pitchOff: clamp(off.pitchOff, -MAX_PITCH_DOWN, MAX_PITCH_UP),
+      yawOff: normalizeAngle(-yp.yaw),
+      pitchOff: clamp(-yp.pitch, -MAX_PITCH_DOWN, MAX_PITCH_UP),
       pitchDownMax: MAX_PITCH_DOWN,
       pitchUpMax: MAX_PITCH_UP
     };
