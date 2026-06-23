@@ -23,10 +23,20 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
 }
 #backBtn { background: rgba(255,255,255,0.92); color: #222; }
 #gyroBtn {
+  position: relative;
   width: 52px; height: 52px; border-radius: 50%; padding: 0;
   background: rgba(48, 108, 210, 0.9); color: #fff; font-size: 9px;
 }
 #gyroBtn.is-on { background: rgba(22, 155, 78, 0.94); }
+#gyroBtn::after {
+  content: 'v48';
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  font-size: 7px;
+  opacity: 0.85;
+}
+body.gyro-active #pano { touch-action: none; }
 #titleBar {
   position: fixed; top: 14px; left: 14px; z-index: 20;
   color: rgba(255,255,255,0.85); font-size: 13px; text-shadow: 0 1px 4px rgba(0,0,0,0.8);
@@ -34,7 +44,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
 }
 </style>
 <script src="vendor/marzipano.js"></script>
-<script src="vendor/gyro-control.js?v=47"></script>
+<script src="vendor/gyro-control.js?v=48"></script>
 </head>
 <body>
 <div id="pano"></div>
@@ -116,14 +126,18 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
     viewer.createScene({ source: source, geometry: geometry, view: currentView }).switchTo();
 
     sceneGyro = new GyroControl(function() { return currentView; });
+    sceneGyro.setGetViewer(function() { return viewer; });
+    sceneGyro.setPanoElement(panoEl);
     sceneGyro.setHooks({
       onStart: function() {
         try { viewer.controls().disable(); } catch (e0) {}
         panoEl.style.touchAction = 'none';
+        document.body.classList.add('gyro-active');
       },
       onStop: function() {
         try { viewer.controls().enable(); } catch (e1) {}
         panoEl.style.touchAction = '';
+        document.body.classList.remove('gyro-active');
       },
       onTick: function() {
         try { viewer.controls().disable(); } catch (e2) {}

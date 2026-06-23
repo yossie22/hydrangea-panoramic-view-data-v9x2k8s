@@ -1,8 +1,7 @@
 /**
- * パノラマ用ジャイロ制御 v47
- * 水平線優先：上下=重力（画面は端末に固定なので角度補正しない）
- * 左右=コンパス(v13)、縦横切替で基準リセットなし
- * 詳細: vendor/gyro-STABLE-v47.txt
+ * パノラマ用ジャイロ制御 v48
+ * 没入モード：重力+コンパス、CSS逆回転で水平・切替抑制
+ * 詳細: vendor/gyro-STABLE-v48.txt
  */
 (function(global) {
   'use strict';
@@ -13,13 +12,17 @@
   var YAW_MAX_STEP = 0.040;
   var HEADING_SPIKE_DEG = 55;
   var SENSOR_LP = 0.22;
+  var ROLL_LP = 0.28;
   var MAX_PITCH_UP = Math.PI * 82 / 180;
   var MAX_PITCH_DOWN = Math.PI * 82 / 180;
   var TRACK_WARMUP_FRAMES = 12;
   var GRAVITY_MIN = 4;
-  var BUILD = 'v47';
+  var BUILD = 'v48';
+
+  var SCREEN_FORWARD = { x: 0, y: 0, z: -1 };
 
   function degToRad(d) { return d * Math.PI / 180; }
+  function radToDeg(r) { return r * 180 / Math.PI; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
   function normalizeAngle(a) {
     while (a > Math.PI) a -= 2 * Math.PI;
@@ -32,14 +35,21 @@
   function lp(prev, next, k) {
     return prev == null ? next : prev + k * (next - prev);
   }
+  function normalizeAngle360(d) {
+    d = d % 360;
+    if (d < 0) d += 360;
+    return d;
+  }
 
-  /** 画面の向き＝端末の -Z（センサーは端末に固定） */
-  var SCREEN_FORWARD = { x: 0, y: 0, z: -1 };
+  function getScreenAngleDeg() {
+    if (global.screen && global.screen.orientation &&
+        typeof global.screen.orientation.angle === 'number') {
+      return global.screen.orientation.angle;
+    }
+    if (typeof global.orientation === 'number') return global.orientation;
+    return 0;
+  }
 
-  /**
-   * 重力から仰角（端末を横に傾けても変わりにくい）
-   * up = 重力と逆方向、pitch = asin(画面向き · up)
-   */
   function pitchFromGravityRad(gx, gy, gz) {
     var len = Math.sqrt(gx * gx + gy * gy + gz * gz);
     if (len < GRAVITY_MIN) return null;
@@ -53,7 +63,6 @@
     return Math.asin(dot);
   }
 
-  /** beta/gamma から重力方向（devicemotion 無し時） */
   function gravityFromEuler(rawEvent) {
     if (rawEvent.beta == null || rawEvent.gamma == null) return null;
     var b = degToRad(rawEvent.beta);
@@ -63,6 +72,23 @@
       y: -Math.sin(b),
       z: Math.cos(b) * Math.cos(g)
     };
+  }
+
+  function rollFromGravity(motion, rawEvent) {
+    var gx;
+    var gy;
+    if (motion && motion.x != null && motion.y != null) {
+      gx = motion.x;
+      gy = motion.y;
+    } else {
+      var g = gravityFromEuler(rawEvent);
+      if (!g) return null;
+      gx = g.x * 9.81;
+      gy = g.y * 9.81;
+    }
+    var len = Math.sqrt(gx * gx + gy * gy);
+    if (len < GRAVITY_MIN) return null;
+    return Math.atan2(gx, -gy);
   }
 
   function readHeadingDeg(rawEvent) {
@@ -150,8 +176,109 @@
     };
   }
 
+  function VisualImmersive(panoEl, getViewer) {
+    this.panoEl = panoEl;
+    this.getViewer = getViewer;
+    this.lockAngle = null;
+    this.initRoll = null;
+    this.fRoll = null;
+    this.saved = null;
+  }
+
+  VisualImmersive.prototype.start = function(motion, rawEvent) {
+    if (!this.panoEl) return;
+    var el = this.panoEl;
+    this.lockAngle = normalizeAngle360(getScreenAngleDeg());
+    var roll = rollFromGravity(motion, rawEvent);
+    this.initRoll = roll != null ? roll : 0;
+    this.fRoll = this.initRoll;
+    this.saved = {
+      width: el.style.width,
+      height: el.style.height,
+      left: el.style.left,
+      top: el.style.top,
+      transform: el.style.transform,
+      transformOrigin: el.style.transformOrigin
+    };
+    this.apply(getScreenAngleDeg(), motion, rawEvent);
+  };
+
+  VisualImmersive.prototype.stop = function() {
+    if (!this.panoEl || !this.saved) return;
+    var el = this.panoEl;
+    var s = this.saved;
+    el.style.width = s.width;
+    el.style.height = s.height;
+    el.style.left = s.left;
+    el.style.top = s.top;
+    el.style.transform = s.transform;
+    el.style.transformOrigin = s.transformOrigin;
+    this.lockAngle = null;
+    this.initRoll = null;
+    this.fRoll = null;
+    this.saved = null;
+    this._updateViewerSize();
+  };
+
+  VisualImmersive.prototype._updateViewerSize = function() {
+    var viewer = this.getViewer ? this.getViewer() : null;
+    if (viewer && typeof viewer.updateSize === 'function') {
+      viewer.updateSize();
+    } else {
+      try {
+        global.dispatchEvent(new Event('resize'));
+      } catch (e) {
+        if (document.createEvent) {
+          var ev = document.createEvent('Event');
+          ev.initEvent('resize', true, true);
+          global.dispatchEvent(ev);
+        }
+      }
+    }
+  };
+
+  VisualImmersive.prototype.apply = function(screenAngleDeg, motion, rawEvent) {
+    if (!this.panoEl || this.lockAngle == null) return;
+    var el = this.panoEl;
+    var cur = normalizeAngle360(screenAngleDeg);
+    var delta = cur - this.lockAngle;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+
+    var roll = rollFromGravity(motion, rawEvent);
+    if (roll != null) {
+      this.fRoll = lp(this.fRoll, roll, ROLL_LP);
+    }
+    var rollOff = (this.fRoll != null && this.initRoll != null)
+      ? this.fRoll - this.initRoll
+      : 0;
+    var counterDeg = -delta - radToDeg(rollOff);
+
+    var vw = global.innerWidth || document.documentElement.clientWidth;
+    var vh = global.innerHeight || document.documentElement.clientHeight;
+    var ad = Math.abs(Math.round(delta));
+
+    if (ad === 90 || ad === 270) {
+      el.style.width = vh + 'px';
+      el.style.height = vw + 'px';
+      el.style.left = ((vw - vh) / 2) + 'px';
+      el.style.top = ((vh - vw) / 2) + 'px';
+    } else {
+      el.style.width = '100%';
+      el.style.height = '100%';
+      el.style.left = '0';
+      el.style.top = '0';
+    }
+
+    el.style.transformOrigin = 'center center';
+    el.style.transform = 'rotate(' + counterDeg + 'deg)';
+    this._updateViewerSize();
+  };
+
   function GyroControl(getView) {
     this.getView = getView;
+    this.getViewer = null;
+    this.panoEl = null;
     this.enabled = false;
     this.handlers = [];
     this.raf = null;
@@ -161,6 +288,7 @@
     this.onChange = null;
     this.hooks = {};
     this.orientState = null;
+    this.visual = null;
     this.displayYaw = 0;
     this.displayPitch = 0;
   }
@@ -175,8 +303,25 @@
     this.hooks = hooks || {};
   };
 
+  GyroControl.prototype.setPanoElement = function(el) {
+    this.panoEl = el;
+    this.visual = el ? new VisualImmersive(el, this.getViewer ? this.getViewer.bind(this) : null) : null;
+  };
+
+  GyroControl.prototype.setGetViewer = function(fn) {
+    this.getViewer = fn;
+    if (this.panoEl) {
+      this.visual = new VisualImmersive(this.panoEl, fn);
+    }
+  };
+
   GyroControl.prototype._emit = function() {
     if (this.onChange) this.onChange(this.enabled);
+  };
+
+  GyroControl.prototype._onLayoutChange = function() {
+    if (!this.enabled || !this.visual) return;
+    this.visual.apply(getScreenAngleDeg(), this.latestMotion, this.latestEvent);
   };
 
   GyroControl.prototype._cleanupListeners = function() {
@@ -192,6 +337,7 @@
       global.cancelAnimationFrame(this.raf);
       this.raf = null;
     }
+    if (this.visual) this.visual.stop();
     this.latestEvent = null;
     this.latestMotion = null;
   };
@@ -211,6 +357,17 @@
     };
     global.addEventListener('devicemotion', motionFn, true);
     self.handlers.push({ type: 'devicemotion', fn: motionFn, capture: true });
+
+    var layoutFn = function() { self._onLayoutChange(); };
+    global.addEventListener('resize', layoutFn);
+    self.handlers.push({ type: 'resize', fn: layoutFn, capture: false });
+    global.addEventListener('orientationchange', layoutFn);
+    self.handlers.push({ type: 'orientationchange', fn: layoutFn, capture: false });
+    if (global.screen && global.screen.orientation &&
+        typeof global.screen.orientation.addEventListener === 'function') {
+      global.screen.orientation.addEventListener('change', layoutFn);
+      self.handlers.push({ type: 'change', fn: layoutFn, target: global.screen.orientation });
+    }
   };
 
   GyroControl.prototype.stop = function() {
@@ -256,7 +413,15 @@
       var v = self.getView();
       if (!v || !self.latestEvent || !self.orientState || !self.base) return;
 
+      if (self.visual && self.orientState.warmup === 0 && !self.visual.lockAngle) {
+        self.visual.start(self.latestMotion, self.latestEvent);
+      }
+
       var o = trackUnified(self.latestEvent, self.latestMotion, self.orientState);
+      if (self.visual && self.visual.lockAngle != null) {
+        self.visual.apply(getScreenAngleDeg(), self.latestMotion, self.latestEvent);
+      }
+
       if (!o || !o.ready) return;
 
       var targetYaw = self.base.viewYaw + o.yawOff;
