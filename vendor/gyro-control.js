@@ -1,6 +1,7 @@
 /**
- * パノラマ用ジャイロ制御 v57
- * 詳細: vendor/gyro-STABLE-v57.txt
+ * パノラマ用ジャイロ制御 v58
+ * 縦=水平補正あり / 横=センサーのみ（CSS回転なし）
+ * 詳細: vendor/gyro-STABLE-v58.txt
  */
 (function(global) {
   'use strict';
@@ -22,7 +23,7 @@
   var MAX_PITCH_DOWN = Math.PI * 78 / 180;
   var TRACK_WARMUP_FRAMES = 18;
   var GRAVITY_MIN = 4;
-  var BUILD = 'v57';
+  var BUILD = 'v58';
 
   var SCREEN_FORWARD = { x: 0, y: 0, z: -1 };
 
@@ -73,7 +74,6 @@
       gz = g.z;
     }
     if (!screenDelta) return { x: gx, y: gy, z: gz };
-    if (screenDelta === -90) return { x: gx, y: gy, z: gz };
     return gravityToLockFrame(gx, gy, gz, screenDelta);
   }
 
@@ -223,17 +223,6 @@
     var err = target - display;
     var k = Math.abs(err) < 0.04 ? smooth * 0.55 : smooth;
     return clamp(k * err, -maxStep, maxStep);
-  }
-
-  function orientDegForLayout(delta, cur) {
-    var absD = Math.abs(Math.round(delta));
-    if (absD === 90) {
-      if (cur === 90) return 90;
-      if (cur === 270) return -10;
-      return delta > 0 ? 90 : -10;
-    }
-    if (absD === 180) return 180;
-    return -delta;
   }
 
   function resetSensorBaselineOnLayout(gyro) {
@@ -390,39 +379,43 @@
     if (this.fRollDeg == null) this.fRollDeg = rollDeg;
 
     var absD = Math.abs(Math.round(delta));
-    var orientDeg = orientDegForLayout(delta, cur);
 
     var vw = global.innerWidth || document.documentElement.clientWidth;
     var vh = global.innerHeight || document.documentElement.clientHeight;
     var layoutKey = cur + ':' + vw + 'x' + vh;
-    var pw = vw;
-    var ph = vh;
 
     if (absD === 90) {
-      pw = vh;
-      ph = vw;
-      el.style.width = pw + 'px';
-      el.style.height = ph + 'px';
-      el.style.left = ((vw - pw) / 2) + 'px';
-      el.style.top = ((vh - ph) / 2) + 'px';
-    } else {
       el.style.width = '100%';
       el.style.height = '100%';
       el.style.left = '0';
       el.style.top = '0';
+      el.style.transform = '';
+      el.style.transformOrigin = '';
+      if (layoutKey !== this.lastLayoutKey) {
+        this.lastLayoutKey = layoutKey;
+        this._updateViewerSize();
+      }
+      return;
     }
 
-    var scale;
-    if (absD === 90) {
-      scale = coverScaleForRotate(pw, ph, orientDeg);
-      scale = Math.max(scale, coverScaleForRotate(pw, ph, orientDeg + ROLL_MAX_COVER_DEG));
-    } else {
-      scale = coverScaleForRotate(pw, ph, ROLL_MAX_COVER_DEG);
-    }
-    scale = scale * 1.04;
+    el.style.width = '100%';
+    el.style.height = '100%';
+    el.style.left = '0';
+    el.style.top = '0';
 
+    if (absD === 180) {
+      el.style.transformOrigin = 'center center';
+      el.style.transform = 'rotate(180deg)';
+      if (layoutKey !== this.lastLayoutKey) {
+        this.lastLayoutKey = layoutKey;
+        this._updateViewerSize();
+      }
+      return;
+    }
+
+    var scale = coverScaleForRotate(vw, vh, ROLL_MAX_COVER_DEG) * 1.04;
     el.style.transformOrigin = 'center center';
-    el.style.transform = 'rotate(' + orientDeg + 'deg) scale(' + scale + ') rotate(' + this.fRollDeg + 'deg)';
+    el.style.transform = 'rotate(' + this.fRollDeg + 'deg) scale(' + scale + ')';
     if (layoutKey !== this.lastLayoutKey) {
       this.lastLayoutKey = layoutKey;
       this._updateViewerSize();
