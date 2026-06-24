@@ -1413,7 +1413,7 @@ data.scenes.forEach(function(scene) {
 });
 
 // ビルド識別（どのファイルが実行されているか確認用）
-var BUILD_STAMP = '2026-06-24-black90v2';
+var BUILD_STAMP = '2026-06-24-peekBgm';
 var guideVideoPreloadBySrc = {};
 var guideVideoSessionDone = {};
 console.log('🧩 viewer build:', BUILD_STAMP);
@@ -1446,6 +1446,53 @@ var hiResPeekVrBackdropViewer = null;
 var hiResPeekVrBackdropScene = null;
 var hiResPeekHotspotEl = null;
 var hiResPeekActiveCfg = null;
+var hiResPeekBgmAudio = null;
+
+function hiResPeekBgmFile(cfg) {
+  if (!cfg || !cfg.peekBgm) return '';
+  return String(cfg.peekBgm).trim();
+}
+
+function stopHiResPeekBgm() {
+  if (!hiResPeekBgmAudio) return;
+  var a = hiResPeekBgmAudio;
+  hiResPeekBgmAudio = null;
+  fadeOutAudio(a, function() {
+    try { a.pause(); } catch (e0) {}
+    try { a.removeAttribute('src'); } catch (e1) {}
+  });
+}
+
+function playHiResPeekBgm(cfg) {
+  stopHiResPeekBgm();
+  var file = hiResPeekBgmFile(cfg);
+  if (!file) return;
+  if (!bgmEnabled && !bgmForce) return;
+  if (!audioEnabled) {
+    audioEnabled = true;
+    audioUnlockConsumed = true;
+  }
+  fadeOutBgmForVideo();
+  var url = 'sounds/' + file.replace(/^sounds\//, '');
+  if (url.indexOf('?') < 0) url += '?v=' + encodeURIComponent(BUILD_STAMP);
+  var audio = new Audio(url);
+  hiResPeekBgmAudio = audio;
+  audio.loop = cfg.peekBgmLoop === true;
+  audio.volume = 0;
+  audio.addEventListener('canplay', function() {
+    if (!hiResPeekOpen || hiResPeekBgmAudio !== audio) return;
+    fadeInAudio(audio, bgmVolume, 400);
+  });
+  audio.addEventListener('ended', function() {
+    if (hiResPeekBgmAudio === audio) hiResPeekBgmAudio = null;
+  });
+  audio.addEventListener('error', function() {
+    console.warn('⚠️ 虫眼鏡BGMを読み込めません:', url);
+  });
+  var p = audio.play();
+  if (p && p.catch) p.catch(function() {});
+  console.log('🎵 虫眼鏡BGM:', file);
+}
 
 function hiResPeekSetupVrBackdropPane(cfg) {
   var pane = document.getElementById('hiResPeekVrPane');
@@ -2085,6 +2132,7 @@ function openHiResPeekOverlay() {
   if (baseImg.complete && baseImg.naturalWidth) showHiResPeekImageReady();
   requestAnimationFrame(function() {
     overlay.classList.add('open');
+    playHiResPeekBgm(cfg);
   });
   showHiResPeekHintFade();
 }
@@ -2095,6 +2143,8 @@ function closeHiResPeekOverlay() {
   if (!overlay) return;
   hiResPeekOpen = false;
   hiResPeekCancelAutoZoom();
+  stopHiResPeekBgm();
+  restoreBgmAfterVideo();
   hiResPeekVideoPlayPending = false;
   hiResPeekPanDrag = null;
   hiResPeekPinch = null;

@@ -138,6 +138,8 @@ var APP_DATA = {
         "videoWidth": 24.5,
         "videoMatte": "lighten",
         "videoLoop": false,
+        "peekBgm": "Produce.mp3",
+        "peekBgmLoop": false,
         "pasteScaleBoost": 2,
         "autoZoomMs": 10000,
         "autoZoomFit": "height",
