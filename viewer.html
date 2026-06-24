@@ -141,30 +141,32 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
   line-height: 1;
   padding: 0;
   pointer-events: none;
-  overflow: visible;
+  overflow: hidden;
 }
 #degreeCircle .degree-inner {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  transform: scale(1.55);
+  transform: scale(1.24);
   transform-origin: center center;
-  line-height: 1.02;
+  line-height: 1;
+  gap: 1px;
 }
 #degreeCircle #yawTxt {
-  font-size: 13px;
+  font-size: 10px;
   font-weight: 900;
-  letter-spacing: -0.6px;
-  text-shadow: 0 0 1px rgba(255,255,255,0.9);
+  letter-spacing: -0.4px;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 #degreeCircle #pitchTxt {
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 900;
   color: #222;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.4px;
   margin-top: 0;
-  text-shadow: 0 0 1px rgba(255,255,255,0.9);
+  font-variant-numeric: tabular-nums;
 }
 #degreeCircle small { display: none; }
 
@@ -193,37 +195,20 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: visible;
+  overflow: hidden;
   line-height: 1;
 }
 #gyroButton .gyro-btn-label {
   display: block;
-  font-size: 13px;
+  font-size: 8.5px;
   font-weight: 900;
-  letter-spacing: -0.8px;
-  transform: scale(1.42);
-  transform-origin: center center;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+  letter-spacing: -0.55px;
   line-height: 1;
+  transform: none;
+  text-shadow: none;
 }
 #gyroButton.visible { opacity: 0.88; pointer-events: auto; }
 #gyroButton.is-on { background: rgba(22, 155, 78, 0.94); }
-#gyroButton::after {
-  content: 'v70';
-  position: absolute;
-  bottom: 1px;
-  right: 1px;
-  font-size: 9px;
-  font-weight: 900;
-  line-height: 1.05;
-  padding: 1px 3px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.96);
-  color: #1a4fad;
-  opacity: 1;
-  letter-spacing: 0;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
-}
 body.gyro-active #pano { touch-action: none; }
 
 /* コンパス（針：data.js / マップジェネレータの heading があるシーンのみ） */

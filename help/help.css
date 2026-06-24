@@ -206,6 +206,7 @@ h1 {
   color: #aaa;
   font-size: 13px;
   margin-top: 18px;
+  white-space: pre-line;
 }
 strong { color: #fff; }
 .card strong { color: #ffe26a; }
