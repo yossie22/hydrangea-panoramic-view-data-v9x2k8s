@@ -1066,6 +1066,7 @@ body.embed-shadow #hiResPeekOverlay { display: none !important; }
 <script src="vendor/marzipano.js"></script>
 <script src="vendor/gyro-control.js?v=70"></script>
 <script src="vendor/minimap-widget.js?v=1"></script>
+<script src="vendor/pano-black90.js?v=2"></script>
 <script>
 // ポータル画像は data.js の imageHotspots（sourceScene / sceneStartId で出発地に紐付け）
 
@@ -1412,10 +1413,22 @@ data.scenes.forEach(function(scene) {
 });
 
 // ビルド識別（どのファイルが実行されているか確認用）
-var BUILD_STAMP = '2026-06-24-hiResPeekTune';
+var BUILD_STAMP = '2026-06-24-black90v2';
 var guideVideoPreloadBySrc = {};
 var guideVideoSessionDone = {};
 console.log('🧩 viewer build:', BUILD_STAMP);
+
+function panoTileSourceForScene(sd, appData) {
+  var tilesBase = window.TILES_BASE || 'tiles';
+  if (window.PanoBlack90 && typeof PanoBlack90.createTileSource === 'function') {
+    var blackFaces = PanoBlack90.getBlackFaces(sd, appData || window.APP_DATA);
+    if (blackFaces.length) {
+      console.log('⬛ 黒90度: シーン ' + sd.id + ' 面=' + blackFaces.join(','));
+    }
+    return PanoBlack90.createTileSource(sd.id, tilesBase, blackFaces);
+  }
+  return Marzipano.ImageUrlSource.fromString(tilesBase + '/' + sd.id + '/{z}/{f}/{y}/{x}.jpg');
+}
 
 // ===== 高画質覗き（VR上の枠タップでEOS切り替え表示） =====
 var HI_RES_PEEK_FADE_IN_MS = 1700;
@@ -1449,7 +1462,7 @@ function hiResPeekSetupVrBackdropPane(cfg) {
   }
   var sd = currentSceneObj.data;
   var tilesBase = window.TILES_BASE || 'tiles';
-  var source = Marzipano.ImageUrlSource.fromString(tilesBase + '/' + sd.id + '/{z}/{f}/{y}/{x}.jpg');
+  var source = panoTileSourceForScene(sd, window.APP_DATA);
   var geometry = new Marzipano.CubeGeometry(sd.levels);
   var limiter = Marzipano.RectilinearView.limit.traditional(sd.faceSize, 75 * Math.PI / 180, 120 * Math.PI / 180);
   var yawC = degToRad(Number(cfg.yawCenter) || 0);
@@ -2342,8 +2355,7 @@ if (typeof GyroControl !== 'undefined' && GyroControl.isSupportedDevice() && gyr
 }
 
 data.scenes.forEach(function(sd) {
-  var tilesBase = window.TILES_BASE || 'tiles';
-  var source = Marzipano.ImageUrlSource.fromString(tilesBase + "/" + sd.id + "/{z}/{f}/{y}/{x}.jpg");
+  var source = panoTileSourceForScene(sd, data);
   var geometry = new Marzipano.CubeGeometry(sd.levels);
   var limiter = Marzipano.RectilinearView.limit.traditional(sd.faceSize, 75*Math.PI/180, 120*Math.PI/180);
   var view = new Marzipano.RectilinearView(sd.initialViewParameters, limiter);
