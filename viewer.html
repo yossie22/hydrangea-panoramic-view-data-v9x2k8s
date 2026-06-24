@@ -139,11 +139,33 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
   font-family: sans-serif; font-weight: bold; color: #0066ff;
   box-shadow: 0 2px 8px rgba(0,0,0,0.28); flex-shrink: 0;
   line-height: 1;
-  padding: 1px;
+  padding: 0;
   pointer-events: none;
+  overflow: visible;
 }
-#degreeCircle #yawTxt { font-size: 9px; letter-spacing: -0.4px; }
-#degreeCircle #pitchTxt { font-size: 8px; color: #666; letter-spacing: -0.3px; margin-top: 1px; }
+#degreeCircle .degree-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transform: scale(1.55);
+  transform-origin: center center;
+  line-height: 1.02;
+}
+#degreeCircle #yawTxt {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: -0.6px;
+  text-shadow: 0 0 1px rgba(255,255,255,0.9);
+}
+#degreeCircle #pitchTxt {
+  font-size: 12px;
+  font-weight: 900;
+  color: #222;
+  letter-spacing: -0.5px;
+  margin-top: 0;
+  text-shadow: 0 0 1px rgba(255,255,255,0.9);
+}
 #degreeCircle small { display: none; }
 
 /* ジャイロ（スマホ・iPad・右上・他UIと同様に自動消灯） */
@@ -161,23 +183,46 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
   pointer-events: none;
   background: rgba(48, 108, 210, 0.9);
   color: #fff;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: bold;
   font-family: sans-serif;
-  letter-spacing: -0.3px;
+  letter-spacing: -0.4px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.45);
   cursor: pointer;
   padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  line-height: 1;
+}
+#gyroButton .gyro-btn-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: -0.8px;
+  transform: scale(1.42);
+  transform-origin: center center;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+  line-height: 1;
 }
 #gyroButton.visible { opacity: 0.88; pointer-events: auto; }
 #gyroButton.is-on { background: rgba(22, 155, 78, 0.94); }
 #gyroButton::after {
   content: 'v70';
   position: absolute;
-  bottom: -2px;
-  right: -2px;
-  font-size: 7px;
-  opacity: 0.85;
+  bottom: 1px;
+  right: 1px;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.05;
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #1a4fad;
+  opacity: 1;
+  letter-spacing: 0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
 }
 body.gyro-active #pano { touch-action: none; }
 
@@ -922,7 +967,7 @@ body.embed-shadow #hiResPeekOverlay { display: none !important; }
 </div>
 <div id="crosshair"></div>
 
-<button type="button" id="gyroButton" aria-label="ジャイロ" aria-pressed="false" title="ジャイロ">GYRO</button>
+<button type="button" id="gyroButton" aria-label="ジャイロ" aria-pressed="false" title="ジャイロ"><span class="gyro-btn-label">GYRO</span></button>
 
 <div id="compassContainer" aria-label="ミニ地図と方位">
   <div id="miniMapWidget" class="mini-map-widget" aria-label="ミニ地図（タップで拡大）">
@@ -933,8 +978,10 @@ body.embed-shadow #hiResPeekOverlay { display: none !important; }
   </div>
   <div id="miniMapDirLabel" class="mini-map-dir-label" aria-live="polite">—</div>
   <div id="degreeCircle" aria-label="画面角度">
-    <span id="yawTxt">0°</span>
-    <span id="pitchTxt">0°</span>
+    <div class="degree-inner">
+      <span id="yawTxt">0</span>
+      <span id="pitchTxt">0</span>
+    </div>
   </div>
 </div>
 
@@ -5867,8 +5914,8 @@ function updateUI() {
 
   var yawEl = document.getElementById('yawTxt');
   var pitchEl = document.getElementById('pitchTxt');
-  if (yawEl) yawEl.textContent = Math.round(yawDeg) + '°';
-  if (pitchEl) pitchEl.textContent = Math.round(pitch) + '°';
+  if (yawEl) yawEl.textContent = String(Math.round(yawDeg));
+  if (pitchEl) pitchEl.textContent = String(Math.round(pitch));
 
   updateCompassDisplay();
 
