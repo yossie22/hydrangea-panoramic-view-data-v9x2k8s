@@ -25,11 +25,89 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
 #crosshair::after { left: 14px; top: 0; width: 2px; height: 30px; }
 
 #compassContainer {
-  position: absolute; top: 62px; right: 14px; display: flex; flex-direction: column; align-items: center;
-  gap: 8px; z-index: 100;
+  position: absolute; top: 62px; right: 14px; display: flex; flex-direction: column; align-items: flex-end;
+  gap: 6px; z-index: 100;
   transition: opacity 0.5s ease; opacity: 0; pointer-events: none;
 }
 #compassContainer.visible { opacity: 1; pointer-events: auto; }
+
+.mini-map-widget {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: width 0.22s ease, height 0.22s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.mini-map-widget.is-expanded {
+  width: 168px;
+  height: 168px;
+}
+.mini-map-disk {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 3px solid #0066ff;
+  background: #1a1a1a;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  position: relative;
+}
+.mini-map-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+.mini-map-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.mini-map-trail {
+  fill: none;
+  stroke: rgba(255, 220, 60, 0.9);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mini-map-pin-dot {
+  fill: rgba(255, 255, 255, 0.95);
+  stroke: rgba(0, 0, 0, 0.45);
+  stroke-width: 0.5;
+}
+.mini-map-pin-dot.is-active {
+  fill: #ff4040;
+  stroke: #fff;
+  stroke-width: 0.8;
+}
+.mini-map-you-dot {
+  fill: #0066ff;
+  stroke: #fff;
+  stroke-width: 0.9;
+}
+.mini-map-bearing-wedge {
+  fill: rgba(255, 70, 70, 0.88);
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 0.4;
+}
+
+#degreeCircle {
+  width: 40px; height: 40px; background: rgba(255,255,255,0.92); border-radius: 50%; border: 3px solid #0066ff;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  font-family: sans-serif; font-weight: bold; color: #0066ff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.28); flex-shrink: 0;
+  line-height: 1;
+  padding: 1px;
+  pointer-events: none;
+}
+#degreeCircle #yawTxt { font-size: 9px; letter-spacing: -0.4px; }
+#degreeCircle #pitchTxt { font-size: 8px; color: #666; letter-spacing: -0.3px; margin-top: 1px; }
+#degreeCircle small { display: none; }
 
 /* ジャイロ（スマホ・iPad・右上・他UIと同様に自動消灯） */
 #gyroButton {
@@ -84,14 +162,10 @@ body.gyro-active #pano { touch-action: none; }
   transition: transform 0.12s linear;
 }
 
-/* 画面角度（yaw / pitch：全シーン共通） */
-#degreeCircle {
-  width: 60px; height: 60px; background: rgba(255,255,255,0.92); border-radius: 50%; border: 3px solid #0066ff;
-  display: flex; flex-direction: column; justify-content: center; align-items: center;
-  font-family: sans-serif; font-weight: bold; font-size: 14px; color: #0066ff;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.28); flex-shrink: 0;
-}
-#degreeCircle small { font-size: 10px; color: #666; }
+/* 旧コンパス（非表示・互換用） */
+#compassCircle { display: none !important; }
+
+/* 画面角度（専門家用・ジャイロ丸サイズ） */
 
 #volumeContainer {
   position: absolute; top: 20px; left: 20px; height: 60px; display: flex; align-items: center;
@@ -813,20 +887,16 @@ body.embed-shadow #hiResPeekOverlay { display: none !important; }
 
 <button type="button" id="gyroButton" aria-label="ジャイロ" aria-pressed="false" title="ジャイロ">GYRO</button>
 
-<div id="compassContainer" aria-label="方位表示">
-  <div id="compassCircle" aria-label="コンパス">
-    <svg class="compass-dial" viewBox="0 0 100 100" width="52" height="52" aria-hidden="true">
-      <text x="50" y="17" font-family="sans-serif" font-size="16" fill="#E60000" font-weight="bold" text-anchor="middle">N</text>
-    </svg>
-    <svg id="compassNeedle" class="compass-needle" viewBox="0 0 100 100" width="52" height="52" aria-hidden="true">
-      <polygon points="50,88 62,54 38,54" fill="#888888" />
-      <polygon points="50,12 62,54 38,54" fill="#E60000" />
-      <circle cx="50" cy="50" r="6" fill="#333333" stroke="#fff" stroke-width="2" />
-    </svg>
+<div id="compassContainer" aria-label="ミニ地図と方位">
+  <div id="miniMapWidget" class="mini-map-widget" aria-label="ミニ地図（タップで拡大）">
+    <div class="mini-map-disk">
+      <img class="mini-map-img" src="map.jpg" alt="">
+      <svg class="mini-map-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+    </div>
   </div>
   <div id="degreeCircle" aria-label="画面角度">
     <span id="yawTxt">0°</span>
-    <small id="pitchTxt">0°</small>
+    <span id="pitchTxt">0°</span>
   </div>
 </div>
 
@@ -866,6 +936,7 @@ body.embed-shadow #hiResPeekOverlay { display: none !important; }
 
 <script src="vendor/marzipano.js"></script>
 <script src="vendor/gyro-control.js?v=70"></script>
+<script src="vendor/minimap-widget.js?v=1"></script>
 <script>
 // ポータル画像は data.js の imageHotspots（sourceScene / sceneStartId で出発地に紐付け）
 
@@ -1812,8 +1883,19 @@ var mapBtnEl = document.getElementById('mapButton');
 var gyroBtnEl = document.getElementById('gyroButton');
 var crosshairEl = document.getElementById('crosshair');
 var compassContEl = document.getElementById('compassContainer');
-var compassNeedleCircle = document.getElementById('compassCircle');
 var volumeUI = document.getElementById('volumeContainer');
+
+var miniMapWidget = null;
+var miniMapWidgetEl = document.getElementById('miniMapWidget');
+if (miniMapWidgetEl && typeof MiniMapWidget !== 'undefined' && typeof APP_DATA !== 'undefined') {
+  var mapCfg = (APP_DATA.mapConfig && APP_DATA.mapConfig.bounds) ?
+    APP_DATA.mapConfig : MiniMapGps.DEFAULT_CONFIG;
+  miniMapWidget = new MiniMapWidget(miniMapWidgetEl, {
+    config: mapCfg,
+    pins: MiniMapGps.buildPinsFromAppData(APP_DATA)
+  });
+  miniMapWidget.onInteract = function() { showUI(); };
+}
 
 var audioEnabled = false;
 // ★長押しの再生/停止トグル（地図OFFとは別軸）
@@ -1943,10 +2025,11 @@ function showUI() {
     if(crosshairEl) crosshairEl.classList.add('visible');
     if(compassContEl) compassContEl.classList.add('visible');
     
-    updateCompassDisplay();
+    updateLocationWidgets();
   } else {
     if(crosshairEl) crosshairEl.classList.remove('visible');
     if(compassContEl) compassContEl.classList.remove('visible');
+    if (miniMapWidget) miniMapWidget.collapse();
   }
 
   if (showVolume) volumeUI.classList.add('visible'); else volumeUI.classList.remove('visible');
@@ -5712,21 +5795,29 @@ function getSceneNorthOffset(sceneData) {
   return Number(sceneData.heading);
 }
 
-function updateCompassDisplay() {
+function updateLocationWidgets() {
   var sceneData = currentSceneObj && currentSceneObj.data;
   var hasCompass = hasSceneCompassData(sceneData);
   var northOff = getSceneNorthOffset(sceneData);
-  if (compassNeedleCircle) {
-    compassNeedleCircle.classList.toggle('active', hasCompass);
+  var yawDeg = currentView ?
+    radToDeg(normalizeAngle(currentView.parameters().yaw)) : 0;
+  var hasPos = sceneData && sceneData.lat != null && sceneData.lng != null &&
+    !isNaN(Number(sceneData.lat)) && !isNaN(Number(sceneData.lng));
+
+  if (miniMapWidget) {
+    miniMapWidget.update({
+      lat: hasPos ? Number(sceneData.lat) : null,
+      lng: hasPos ? Number(sceneData.lng) : null,
+      yawDeg: yawDeg,
+      northOff: northOff,
+      showBearing: hasCompass,
+      sceneId: sceneData ? sceneData.id : ''
+    });
   }
-  if (!hasCompass || northOff == null || !currentView) {
-    return;
-  }
-  var yawDeg = radToDeg(normalizeAngle(currentView.parameters().yaw));
-  var needleEl = document.getElementById('compassNeedle');
-  if (needleEl) {
-    needleEl.style.transform = 'rotate(' + (-(northOff + yawDeg)) + 'deg)';
-  }
+}
+
+function updateCompassDisplay() {
+  updateLocationWidgets();
 }
 
 function updateUI() {

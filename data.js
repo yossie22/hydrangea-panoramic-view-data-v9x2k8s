@@ -139,5 +139,14 @@ var APP_DATA = {
       }
     }
   ],
+  "mapConfig": {
+    "image": "map.jpg",
+    "bounds": {
+      "topLeft": { "lat": 33.52093, "lng": 131.217184 },
+      "bottomRight": { "lat": 33.520168, "lng": 131.218755 }
+    },
+    "pinOffset": { "x": 0, "y": 0 },
+    "insets": { "left": 0, "top": 0, "right": 0, "bottom": 0 }
+  },
   "name": "Local 1024tiles"
 };
