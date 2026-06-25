@@ -78,7 +78,35 @@ var APP_DATA = {
       "course": "aa",
       "lat": 33.520525,
       "lng": 131.21764,
-      "heading": 158
+      "heading": 158,
+      "videoHotspots": [
+        {
+          "src": "video/海軍.webm",
+          "yaw": 93.6,
+          "pitch": 8.3,
+          "width": 924,
+          "height": 1254,
+          "radius": 850,
+          "fade": 0,
+          "fadeBottom": 31,
+          "fullscreen": false,
+          "objectFit": "contain",
+          "objectPositionY": 50,
+          "tone": {
+            "brightness": 0.96,
+            "contrast": 0.94,
+            "saturate": 0.88
+          },
+          "loop": false,
+          "fadeInMs": 0,
+          "autoplay": false,
+          "playOnView": true,
+          "playYawRange": 15,
+          "srcIos": "video/guide_alpha_ios.mp4",
+          "srcHevc": "video/海軍.mp4",
+          "footShadow": false
+        }
+      ]
     },
     {
       "id": "2-aa003",
@@ -150,15 +178,31 @@ var APP_DATA = {
   "mapConfig": {
     "image": "map.jpg",
     "bounds": {
-      "topLeft": { "lat": 33.52093, "lng": 131.217184 },
-      "bottomRight": { "lat": 33.520168, "lng": 131.218755 }
+      "topLeft": {
+        "lat": 33.52093,
+        "lng": 131.217184
+      },
+      "bottomRight": {
+        "lat": 33.520168,
+        "lng": 131.218755
+      }
     },
-    "pinOffset": { "x": 0, "y": 0 },
-    "insets": { "left": 0, "top": 0, "right": 0, "bottom": 0 }
+    "pinOffset": {
+      "x": 0,
+      "y": 0
+    },
+    "insets": {
+      "left": 0,
+      "top": 0,
+      "right": 0,
+      "bottom": 0
+    }
   },
   "name": "Local 1024tiles",
   "panoramaBlack90": {
     "enabled": false,
-    "faces": ["b"]
+    "faces": [
+      "b"
+    ]
   }
 };

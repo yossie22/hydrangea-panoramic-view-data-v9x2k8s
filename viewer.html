@@ -1449,7 +1449,7 @@ data.scenes.forEach(function(scene) {
 });
 
 // ビルド識別（どのファイルが実行されているか確認用）
-var BUILD_STAMP = '2026-06-25-peekBgmIosStop';
+var BUILD_STAMP = '2026-06-25-shadowFollowPano';
 var guideVideoPreloadBySrc = {};
 var guideVideoSessionDone = {};
 console.log('🧩 viewer build:', BUILD_STAMP);
@@ -4550,6 +4550,7 @@ function buildFootShadowPatch(vh) {
 
 function destroyEntryGroundShadow(entry) {
   if (!entry) return;
+  detachShadowScreenOverlaySync(entry);
   if (entry.groundShadowHotspotHandle) {
     try {
       if (typeof entry.groundShadowHotspotHandle.destroy === 'function') {
@@ -4810,10 +4811,13 @@ function scheduleShadowScreenOverlayRefresh() {
 }
 
 function attachShadowScreenOverlaySync(entry) {
-  if (!entry || entry.shadowScreenViewHooked) return;
-  if (!currentScene || !currentScene.view()) return;
-  entry.shadowScreenViewHooked = true;
-  currentScene.view().addEventListener('change', scheduleShadowScreenOverlayRefresh);
+  if (!entry || !currentScene || !currentScene.view()) return;
+  var view = currentScene.view();
+  if (entry.shadowScreenViewRef === view) return;
+  detachShadowScreenOverlaySync(entry);
+  entry.shadowScreenViewRef = view;
+  entry.shadowScreenChangeHandler = scheduleShadowScreenOverlayRefresh;
+  view.addEventListener('change', entry.shadowScreenChangeHandler);
 }
 
 function refreshShadowScreenOverlay(entry) {
@@ -4909,7 +4913,55 @@ function applyGuideGroundShadow(entry, vh) {
 }
 
 var shadowPaintLayoutTimer = 0;
-var shadowPaintLayoutHooked = false;
+var shadowPaintLayoutViewRef = null;
+var shadowPaintLayoutChangeHandler = null;
+var shadowEmbedOverlayRaf = 0;
+
+function detachShadowPaintLayoutSync() {
+  if (shadowPaintLayoutViewRef && shadowPaintLayoutChangeHandler) {
+    try { shadowPaintLayoutViewRef.removeEventListener('change', shadowPaintLayoutChangeHandler); } catch (e0) {}
+  }
+  shadowPaintLayoutViewRef = null;
+  shadowPaintLayoutChangeHandler = null;
+}
+
+function detachShadowScreenOverlaySync(entry) {
+  if (!entry) return;
+  if (entry.shadowScreenViewRef && entry.shadowScreenChangeHandler) {
+    try { entry.shadowScreenViewRef.removeEventListener('change', entry.shadowScreenChangeHandler); } catch (e1) {}
+  }
+  entry.shadowScreenViewRef = null;
+  entry.shadowScreenChangeHandler = null;
+}
+
+function shadowEmbedOverlayTick() {
+  if (!embedShadowMode) {
+    shadowEmbedOverlayRaf = 0;
+    return;
+  }
+  var entry = window.sceneVideoEls && window.sceneVideoEls[0];
+  if (entry && entry.shadowScreenOverlayEl) {
+    updateShadowScreenOverlayGeometry(entry);
+  }
+  scheduleShadowPaintLayoutPost();
+  shadowEmbedOverlayRaf = requestAnimationFrame(shadowEmbedOverlayTick);
+}
+
+function bindShadowEmbedOverlayTracking() {
+  if (!embedShadowMode) return;
+  attachShadowPaintLayoutSync();
+  if (!shadowEmbedOverlayRaf) {
+    shadowEmbedOverlayRaf = requestAnimationFrame(shadowEmbedOverlayTick);
+  }
+}
+
+function stopShadowEmbedOverlayTracking() {
+  if (shadowEmbedOverlayRaf) {
+    cancelAnimationFrame(shadowEmbedOverlayRaf);
+    shadowEmbedOverlayRaf = 0;
+  }
+  detachShadowPaintLayoutSync();
+}
 
 function ensureGuidePaintMaskCanvas(entry) {
   if (!entry || !entry.vid) return null;
@@ -5126,10 +5178,14 @@ function scheduleShadowPaintLayoutPost() {
 }
 
 function attachShadowPaintLayoutSync() {
-  if (!embedShadowMode || shadowPaintLayoutHooked) return;
+  if (!embedShadowMode) return;
   if (!currentScene || !currentScene.view()) return;
-  shadowPaintLayoutHooked = true;
-  currentScene.view().addEventListener('change', scheduleShadowPaintLayoutPost);
+  var view = currentScene.view();
+  if (shadowPaintLayoutViewRef === view) return;
+  detachShadowPaintLayoutSync();
+  shadowPaintLayoutViewRef = view;
+  shadowPaintLayoutChangeHandler = scheduleShadowPaintLayoutPost;
+  view.addEventListener('change', shadowPaintLayoutChangeHandler);
 }
 
 function guideFootShadowStyle(vh) {
@@ -6092,6 +6148,7 @@ function notifyShadowParentReady() {
       sceneId: currentSceneObj ? currentSceneObj.data.id : null
     }, '*');
   } catch (e) {}
+  bindShadowEmbedOverlayTracking();
   scheduleShadowPaintLayoutPost();
 }
 
@@ -6214,15 +6271,15 @@ function attachVideoHotspots(sceneId, sceneData) {
     entry.guideRadius = radius;
     entry.guideW = w;
     entry.guideH = h;
-    if (guideFootShadowEnabled(vh)) {
-      applyGuideGroundShadow(entry, vh);
-    }
     var hs = currentScene.hotspotContainer().createHotspot(wrap,
       { yaw: placeYaw, pitch: placePitch },
       { perspective: { radius: radius } }
     );
     window.sceneVideoHotspotHandles.push(hs);
     window.sceneVideoEls.push(entry);
+    if (guideFootShadowEnabled(vh)) {
+      applyGuideGroundShadow(entry, vh);
+    }
     console.log('🎬 ガイド配置: ' + sceneId +
       ' yaw=' + vh.yaw + '° pitch=' + vh.pitch + '° size=' + w + 'x' + h + ' radius=' + radius +
       ' （1回再生・終了後は静止画）');
@@ -6269,6 +6326,7 @@ function scheduleAttachVideoHotspots(sceneId, sceneData, delayMs) {
     if (embedShadowMode) {
       notifyShadowParentReady();
       attachShadowPaintLayoutSync();
+      bindShadowEmbedOverlayTracking();
       if (!window.sceneVideoEls || !window.sceneVideoEls.length) {
         attachVideoHotspots(sceneId, sceneData);
       }
@@ -6299,6 +6357,7 @@ function collectImageHotspotsForScene(sceneId) {
 
 function switchScene(sceneId, yaw, pitch, fov, fromPortalHotspot, keepFullscreenOverlay) {
   if (window.sceneGyro) window.sceneGyro.stop();
+  if (embedShadowMode) stopShadowEmbedOverlayTracking();
   var obj = scenesData[sceneId];
   if (!obj) return;
 
