@@ -39,7 +39,26 @@ var APP_DATA = {
       "course": "aa",
       "lat": 33.520345,
       "lng": 131.21794,
-      "heading": 180
+      "heading": 90,
+      "imageHotspots": [
+        {
+          "sceneStartId": "0-aa001",
+          "sourceScene": "0-aa001",
+          "src": "portal.png",
+          "width": 700,
+          "height": 700,
+          "yawCenter": 90,
+          "yawRange": 20,
+          "targetScene": "4-bb001",
+          "targetYaw": 0,
+          "targetPitch": 0,
+          "fadeTime": 5,
+          "dispTime": 6000,
+          "startHoldTime": 2500,
+          "effect": "grow",
+          "resetDisplay": false
+        }
+      ]
     },
     {
       "id": "1-aa002",
@@ -102,8 +121,7 @@ var APP_DATA = {
           "autoplay": false,
           "playOnView": true,
           "playYawRange": 15,
-          "srcIos": "video/guide_alpha_ios.mp4",
-          "srcHevc": "video/海軍.mp4",
+          "srcHevc": "video/ipad2.mp4",
           "footShadow": false,
           "footShadowConfig": {}
         }
@@ -174,6 +192,42 @@ var APP_DATA = {
         "autoZoomFit": "height",
         "autoZoomSpeed": 1
       }
+    },
+    {
+      "id": "4-bb001",
+      "name": "bb001",
+      "levels": [
+        {
+          "tileSize": 256,
+          "size": 256,
+          "fallbackOnly": true
+        },
+        {
+          "tileSize": 512,
+          "size": 512
+        },
+        {
+          "tileSize": 1024,
+          "size": 1024
+        }
+      ],
+      "faceSize": 2976,
+      "initialViewParameters": {
+        "yaw": 0,
+        "pitch": 0,
+        "fov": 1.1479251634083179
+      },
+      "linkHotspots": [
+        {
+          "yaw": 0,
+          "pitch": 0,
+          "rotation": 0,
+          "target": "4-bb001"
+        }
+      ],
+      "infoHotspots": [],
+      "position": 1,
+      "course": "bb"
     }
   ],
   "mapConfig": {

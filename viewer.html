@@ -384,12 +384,20 @@ body.gyro-active #pano { touch-action: none; }
   opacity: 0;
   pointer-events: none;
   overflow: visible;
+  border: none;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
 }
 .portal-hotspot img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  border: none;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
 }
 /* タップ判定：中央の円（広すぎ→22%に縮小済み → やや拡大 34%/40%） */
 .portal-hit-area {
@@ -1449,7 +1457,7 @@ data.scenes.forEach(function(scene) {
 });
 
 // ビルド識別（どのファイルが実行されているか確認用）
-var BUILD_STAMP = '2026-06-25-shadowPanoHotspot';
+var BUILD_STAMP = '2026-06-25-sceneSounds';
 var guideVideoPreloadBySrc = {};
 var guideVideoSessionDone = {};
 console.log('🧩 viewer build:', BUILD_STAMP);
@@ -1497,6 +1505,78 @@ function hiResPeekBgmFile(cfg) {
   return String(cfg.peekBgm).trim();
 }
 
+function buildHiResPeekBgmCandidates(cfg, sceneId) {
+  var seen = {};
+  var out = [];
+  function push(f) {
+    f = String(f || '').trim().replace(/^sounds\//, '');
+    if (!f || seen[f]) return;
+    seen[f] = true;
+    out.push(f);
+  }
+  var fromCfg = hiResPeekBgmFile(cfg);
+  if (fromCfg) push(fromCfg);
+  if (sceneId) {
+    push(sceneId + '/peek.mp3');
+    push(sceneId + '/Produce.mp3');
+    push('peek-' + sceneId + '.mp3');
+    push(sceneId + '-peek.mp3');
+  }
+  return out;
+}
+
+function buildSceneBgmAutoCandidates(sceneData) {
+  var seen = {};
+  var out = [];
+  function push(f) {
+    f = String(f || '').trim().replace(/^sounds\//, '');
+    if (!f || seen[f]) return;
+    seen[f] = true;
+    out.push(f);
+  }
+  if (!sceneData) return out;
+  var id = sceneData.id;
+  var name = sceneData.name;
+  if (id) {
+    push(id + '.mp3');
+    push(id + '.m4a');
+    push(id + '/bgm.mp3');
+    push('scenes/' + id + '.mp3');
+  }
+  if (name) {
+    push(name + '.mp3');
+    push('scenes/' + name + '.mp3');
+  }
+  return out;
+}
+
+function soundsUrl(file) {
+  var url = 'sounds/' + String(file || '').replace(/^sounds\//, '');
+  if (url.indexOf('?') < 0) url += '?v=' + encodeURIComponent(BUILD_STAMP);
+  return url;
+}
+
+function probeSoundsFile(file) {
+  return fetch(soundsUrl(file), { method: 'HEAD', cache: 'no-store' })
+    .then(function(r) { return r.ok; })
+    .catch(function() { return false; });
+}
+
+function resolveAutoSceneBgmItems(sceneData) {
+  var candidates = buildSceneBgmAutoCandidates(sceneData);
+  if (!candidates.length) return Promise.resolve(null);
+  var chain = Promise.resolve(null);
+  candidates.forEach(function(file) {
+    chain = chain.then(function(found) {
+      if (found) return found;
+      return probeSoundsFile(file).then(function(ok) {
+        return ok ? [{ file: file, loop: false, fromScene: true }] : null;
+      });
+    });
+  });
+  return chain;
+}
+
 function stopHiResPeekBgm() {
   if (!hiResPeekBgmAudio) return;
   var a = hiResPeekBgmAudio;
@@ -1524,19 +1604,25 @@ function stopHiResPeekBgm() {
 
 function playHiResPeekBgm(cfg) {
   stopHiResPeekBgm();
-  var file = hiResPeekBgmFile(cfg);
-  if (!file) return;
   if (!bgmEnabled && !bgmForce) return;
   if (!audioEnabled) {
     audioEnabled = true;
     audioUnlockConsumed = true;
   }
+  var sceneId = currentSceneObj && currentSceneObj.data ? currentSceneObj.data.id : '';
+  var candidates = buildHiResPeekBgmCandidates(cfg, sceneId);
+  if (!candidates.length) return;
   fadeOutBgmForVideo();
-  var url = 'sounds/' + file.replace(/^sounds\//, '');
-  if (url.indexOf('?') < 0) url += '?v=' + encodeURIComponent(BUILD_STAMP);
+  tryPlayHiResPeekBgmCandidate(cfg, candidates, 0);
+}
+
+function tryPlayHiResPeekBgmCandidate(cfg, candidates, idx) {
+  if (!hiResPeekOpen || idx >= candidates.length) return;
+  var file = candidates[idx];
+  var url = soundsUrl(file);
   var audio = new Audio(url);
   hiResPeekBgmAudio = audio;
-  audio.loop = cfg.peekBgmLoop === true;
+  audio.loop = cfg && cfg.peekBgmLoop === true;
   audio.volume = 0;
   audio.addEventListener('canplay', function() {
     if (!hiResPeekOpen || hiResPeekBgmAudio !== audio) return;
@@ -1546,7 +1632,8 @@ function playHiResPeekBgm(cfg) {
     if (hiResPeekBgmAudio === audio) hiResPeekBgmAudio = null;
   });
   audio.addEventListener('error', function() {
-    console.warn('⚠️ 虫眼鏡BGMを読み込めません:', url);
+    if (hiResPeekBgmAudio === audio) hiResPeekBgmAudio = null;
+    tryPlayHiResPeekBgmCandidate(cfg, candidates, idx + 1);
   });
   var p = audio.play();
   if (p && p.catch) p.catch(function() {});
@@ -2860,6 +2947,15 @@ function legacyPortalCenterRange(ih) {
   return { center: center, range: range };
 }
 
+function portalHasRenderableMedia(ih) {
+  if (!ih) return false;
+  if (ih.openInLook) return true;
+  if (ih.src && String(ih.src).trim()) return true;
+  if (ih.videoSrc && String(ih.videoSrc).trim()) return true;
+  if (ih.frameSequence && resolveFrameSequenceUrls(ih.frameSequence).length) return true;
+  return false;
+}
+
 function portalCenterDeg(ih) {
   if (typeof ih.yawCenter === 'number' && !isNaN(ih.yawCenter)) return ih.yawCenter;
   return legacyPortalCenterRange(ih).center;
@@ -3155,13 +3251,18 @@ function onPortalHotspotTap(hs) {
   }
   if (!ih.targetScene) return;
   setPortalTappable(hs, false);
+  var targetId = resolveSceneId(ih.targetScene) || ih.targetScene;
+  if (!scenesData[targetId]) {
+    console.warn('⚠️ ポータル移動先が見つかりません:', ih.targetScene);
+    return;
+  }
   if (isPortalDiveTransition(ih)) {
-    console.log('🌸 ポータル・ダイブ → ' + ih.targetScene);
+    console.log('🌸 ポータル・ダイブ → ' + targetId);
     playPortalDiveTransition(hs);
     return;
   }
-  console.log('🎎 hotspot タップ → ' + ih.targetScene + ' に移動');
-  switchScene(ih.targetScene, ih.targetYaw, ih.targetPitch, currentView.parameters().fov, true);
+  console.log('🎎 hotspot タップ → ' + targetId + ' に移動');
+  switchScene(targetId, ih.targetYaw, ih.targetPitch, currentView.parameters().fov, true);
 }
 
 function isSupportedVideoSrc(src) {
@@ -5159,8 +5260,6 @@ function scheduleShadowPaintLayoutPost() {
   if (shadowPaintLayoutTimer) clearTimeout(shadowPaintLayoutTimer);
   shadowPaintLayoutTimer = setTimeout(function() {
     shadowPaintLayoutTimer = 0;
-    var entry = window.sceneVideoEls && window.sceneVideoEls[0];
-    if (entry && entry.shadowScreenOverlayEl) updateShadowScreenOverlayGeometry(entry);
     postShadowPaintLayoutToParent();
   }, 70);
 }
@@ -6512,7 +6611,11 @@ function switchScene(sceneId, yaw, pitch, fov, fromPortalHotspot, keepFullscreen
   var portalList = collectImageHotspotsForScene(sceneId);
   console.log('🔍 [switchScene] sceneId=' + sceneId + ' ポータル件数=' + portalList.length);
   if (portalList.length > 0) {
-    portalList.forEach(function(ih) {
+    portalList.forEach(function(ih, portalIdx) {
+      if (!portalHasRenderableMedia(ih)) {
+        console.warn('⚠️ ポータル省略（画像・動画なし）: 移動先=' + (ih.targetScene || '?'));
+        return;
+      }
       var wrapper = document.createElement('div');
       var inner = document.createElement('div');
       var img = document.createElement('img');
@@ -6520,7 +6623,15 @@ function switchScene(sceneId, yaw, pitch, fov, fromPortalHotspot, keepFullscreen
       var cover = null;
       var fadeMs = portalFadeMs(ih);
       var preset = portalEffectPreset(ih);
-      img.src = ih.src;
+      if (ih.src && String(ih.src).trim()) {
+        img.src = ih.src;
+        img.onerror = function() {
+          this.style.display = 'none';
+          this.style.border = 'none';
+        };
+      } else {
+        img.style.display = 'none';
+      }
       img.alt = '';
       img.style.opacity = preset.reveal ? '0' : '1';
       img.style.transition = 'opacity ' + fadeMs + 'ms ease-in-out';
@@ -6541,6 +6652,7 @@ function switchScene(sceneId, yaw, pitch, fov, fromPortalHotspot, keepFullscreen
         inner.appendChild(cover);
       }
       hitArea.className = 'portal-hit-area';
+      hitArea.style.zIndex = String(1000 - portalIdx);
       preparePortalMotion(inner, cover, ih, fadeMs);
       wrapper.appendChild(inner);
       wrapper.appendChild(hitArea);
@@ -6553,7 +6665,7 @@ function switchScene(sceneId, yaw, pitch, fov, fromPortalHotspot, keepFullscreen
         hitArea: hitArea,
         ih: ih,
         sceneId: sceneId,
-        flagKey: 'hotspotShown_' + sceneId + '_' + ih.targetScene,
+        flagKey: 'hotspotShown_' + sceneId + '_' + portalIdx + '_' + (ih.targetScene || 'portal'),
         portalActive: false,
         videoPlaying: false,
         linkedVideo: null,
@@ -8139,8 +8251,10 @@ function normalizeBgmItem(raw, defaultLoop, extra) {
   return item;
 }
 
-/** シーンの bgm / APP_DATA.sceneBgm / APP_DATA.courseBgm */
-function normalizeBgmItems(sceneData) {
+var sceneBgmResolveToken = 0;
+
+/** シーンの bgm / APP_DATA.sceneBgm / APP_DATA.courseBgm（data.js 明示指定） */
+function getExplicitBgmItems(sceneData) {
   if (!sceneData) return null;
   var items = [];
   var raw = sceneData.bgm;
@@ -8177,23 +8291,44 @@ function sceneUsesCourseBgm(sceneData) {
 function playSceneBGM(sceneId) {
   var sceneObj = scenesData[sceneId];
   if (!sceneObj) return;
+  var token = ++sceneBgmResolveToken;
+  var explicit = getExplicitBgmItems(sceneObj.data);
+
+  function startItems(bgmItems) {
+    if (token !== sceneBgmResolveToken) return;
+    if (!scenesData[sceneId] || currentSceneObj !== sceneObj) return;
+    if (!bgmItems || !bgmItems.length) {
+      stopAllBGM();
+      activeBgmCourse = null;
+      return;
+    }
+    if (!audioEnabled) return;
+    if (!shouldPlayBGM()) {
+      stopAllBGM();
+      return;
+    }
+    playSceneBGMItems(sceneId, sceneObj, bgmItems);
+  }
+
+  if (explicit && explicit.length) {
+    startItems(explicit);
+    return;
+  }
+
+  resolveAutoSceneBgmItems(sceneObj.data).then(function(autoItems) {
+    startItems(autoItems);
+  });
+}
+
+function playSceneBGMItems(sceneId, sceneObj, bgmItems) {
   var course = sceneObj.data.course || null;
 
-  // BGM指定が無いコースへ入ったら、前コースの音をフェードアウトする。
-  var bgmItems = normalizeBgmItems(sceneObj.data);
   if (!bgmItems || !bgmItems.length) {
     stopAllBGM();
     activeBgmCourse = null;
     return;
   }
 
-  if (!audioEnabled) return;
-  if (!shouldPlayBGM()) {
-    stopAllBGM();
-    return;
-  }
-
-  // bb→aa などコースが変わったら前コースのBGMを必ず止める
   if (course && activeBgmCourse && course !== activeBgmCourse) {
     stopAllBGM();
     activeBgmCourse = null;
@@ -8208,7 +8343,6 @@ function playSceneBGM(sceneId) {
 
   var primaryFile = bgmFiles[0];
 
-  // 同一コース・同一曲が既に鳴っている → フェードやり直ししない（音量低下防止）
   if (primaryFile && bgmAudios[primaryFile]) {
     var cur = bgmAudios[primaryFile];
     if (!cur.paused && !cur.ended && cur.volume > 0.05) {
@@ -8245,9 +8379,10 @@ function playSceneBGM(sceneId) {
     var file = item.file;
     if (!file) return;
     if (!bgmAudios[file] || (bgmAudios[file].paused && !bgmAudios[file].ended)) {
-      playAudio('sounds/' + file, {
+      playAudio(soundsUrl(file), {
         loop: resolveLoopFlag(file, item),
-        course: (item.fromCourse && course) ? course : null
+        course: (item.fromCourse && course) ? course : null,
+        cacheKey: file
       });
       if (item.fromCourse && course) activeBgmCourse = course;
     } else {
@@ -8266,7 +8401,7 @@ function resolveLoopFlag(fileName, item) {
 function playAudio(filePath, opts) {
   opts = opts || {};
   var audio = new Audio(filePath);
-  var key = filePath.replace('sounds/', '');
+  var key = opts.cacheKey || filePath.replace(/^sounds\//, '').replace(/\?.*$/, '');
   audio.loop = !!opts.loop;
   audio.volume = 0;
   audio.__bgmCourse = opts.course || null;
