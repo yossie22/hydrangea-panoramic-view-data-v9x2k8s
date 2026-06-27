@@ -60,18 +60,18 @@ var APP_DATA = {
           "src": "portal.png",
           "width": 700,
           "height": 700,
-          "yawCenter": 80,
-          "yawRange": 18,
+          "yawCenter": 90,
+          "yawRange": 25,
+          "pitchCenter": -20,
           "targetScene": "4-bb001",
           "targetYaw": 0,
           "targetPitch": 0,
           "fadeTime": 5,
-          "dispTime": 6000,
-          "startHoldTime": 2500,
+          "dispTime": 7000,
+          "startHoldTime": 1000,
           "effect": "grow",
           "resetDisplay": false,
-          "pitchCenter": -30,
-          "pitchRange": 35
+          "pitchRange": 20
         }
       ]
     },
@@ -320,6 +320,27 @@ var APP_DATA = {
           "frameWidth": 80,
           "frameHeight": 63,
           "autoZoomMs": 5000
+        }
+      ],
+      "imageHotspots": [
+        {
+          "sceneStartId": "4-bb001",
+          "sourceScene": "4-bb001",
+          "src": "portal2.png",
+          "width": 700,
+          "height": 700,
+          "yawCenter": 180,
+          "yawRange": 30,
+          "targetScene": "0-aa001",
+          "targetYaw": 0,
+          "targetPitch": 0,
+          "fadeTime": 5,
+          "dispTime": 10000,
+          "startHoldTime": 1000,
+          "effect": "grow",
+          "resetDisplay": false,
+          "pitchCenter": 5,
+          "pitchRange": 35
         }
       ]
     }
