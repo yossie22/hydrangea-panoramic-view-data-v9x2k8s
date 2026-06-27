@@ -1,7 +1,7 @@
 /**
- * パノラマ用ジャイロ制御 v70
- * v69 ＋ ボタン右の横（90°）で上下の符号を反転
- * 詳細: vendor/gyro-STABLE-v70.txt
+ * パノラマ用ジャイロ制御 v72
+ * v71 ＋ 縦↔横ロール時は必ずOFF→角度復元→自動ON
+ * 詳細: vendor/gyro-STABLE-v72.txt
  */
 (function(global) {
   'use strict';
@@ -14,8 +14,9 @@
   var PITCH_SPIKE_DEG = 20;
   var SENSOR_LP = 0.22;
   var STARTUP_SETTLE_FRAMES = 20;
+  var ROLL_RESTART_DELAY_MS = 480;
   var LOCK_JUMP_REJECT_DEG = 8;
-  var BUILD = 'v70';
+  var BUILD = 'v72';
   var LANDSCAPE_RIGHT_CUR = 90;
   var LANDSCAPE_LEFT_CUR = 270;
 
@@ -141,6 +142,29 @@
     return a === LANDSCAPE_RIGHT_CUR || a === LANDSCAPE_LEFT_CUR;
   }
 
+  function isLandscapeScreen(screenAngle) {
+    var a = normalizeAngle360(screenAngle);
+    return a === LANDSCAPE_RIGHT_CUR || a === LANDSCAPE_LEFT_CUR;
+  }
+
+  function boostPitchOff(pitchOff, screenAngle) {
+    var deg = radToDeg(pitchOff);
+    if (isLandscapeScreen(screenAngle)) {
+      if (deg < 0) deg *= 1.58;
+      else if (deg > 0) deg *= 1.15;
+    } else {
+      if (deg < 0) deg *= 1.32;
+    }
+    return degToRad(deg);
+  }
+
+  function pitchClampLimits(screenAngle) {
+    if (isLandscapeScreen(screenAngle)) {
+      return { min: degToRad(-88), max: degToRad(74) };
+    }
+    return { min: degToRad(-89), max: degToRad(80) };
+  }
+
   function resetSensorBaseline(state) {
     state.initBeta = null;
     state.fBeta = null;
@@ -184,6 +208,7 @@
         state.lastPitchOffDeg = pitchOffDeg;
       }
     }
+    pitchOff = boostPitchOff(pitchOff, normalized.screenAngle);
 
     var heading = useHeading ? readHeadingDeg(normalized) : null;
     var yawOff = 0;
@@ -280,6 +305,8 @@
     this.hintText = '';
     this.autoLandscape = false;
     this.userDismissed = false;
+    this._rollRestartTimer = null;
+    this._rollRestartBusy = false;
   }
 
   GyroControl.BUILD = BUILD;
@@ -295,6 +322,40 @@
   GyroControl.prototype._rejectOrientation = function(msg) {
     this.hintText = msg || '向きが変わったのでGYROを付け直してください';
     this.stop(false);
+  };
+
+  GyroControl.prototype._onScreenRoll = function(savedYaw, savedPitch, newSnapped) {
+    if (this._rollRestartBusy) return;
+    this._rollRestartBusy = true;
+    var view = this.getView();
+    var yaw = savedYaw;
+    var pitch = savedPitch;
+    this.stop(false);
+    if (view) {
+      try {
+        view.setYaw(yaw);
+        view.setPitch(pitch);
+      } catch (eFix) {}
+    }
+    if (this.visual) this.visual.apply(newSnapped);
+    this.hintText = '';
+    var self = this;
+    if (this._rollRestartTimer) clearTimeout(this._rollRestartTimer);
+    this._rollRestartTimer = setTimeout(function() {
+      self._rollRestartTimer = null;
+      self._rollRestartBusy = false;
+      if (self.userDismissed) return;
+      self.requestStart();
+    }, ROLL_RESTART_DELAY_MS);
+  };
+
+  GyroControl.prototype._checkScreenRoll = function(newSnapped) {
+    if (!this.enabled || !this.orientState) return false;
+    if (this.orientState.settleLeft > 0) return false;
+    if (this.orientState.lockedCur == null) return false;
+    if (newSnapped === this.orientState.lockedCur) return false;
+    this._onScreenRoll(this.displayYaw, this.displayPitch, newSnapped);
+    return true;
   };
 
   GyroControl.prototype.setAutoLandscape = function(on) {
@@ -366,6 +427,7 @@
         self._rejectOrientation('この向きでは使えません');
         return;
       }
+      if (self._checkScreenRoll(snapped)) return;
       if (self.visual) self.visual.apply(snapped);
     };
     global.addEventListener('resize', layoutFn);
@@ -395,6 +457,11 @@
   };
 
   GyroControl.prototype.stop = function(fromUser) {
+    if (this._rollRestartTimer) {
+      clearTimeout(this._rollRestartTimer);
+      this._rollRestartTimer = null;
+    }
+    this._rollRestartBusy = false;
     var wasOn = this.enabled;
     if (fromUser !== false) this.userDismissed = true;
     this._cleanupListeners();
@@ -469,8 +536,7 @@
       if (self.orientState.settleLeft === 0 &&
           self.orientState.lockedCur != null &&
           snapped !== self.orientState.lockedCur) {
-        self._rejectOrientation('向きが変わったのでGYROを付け直してください');
-        return;
+        if (self._checkScreenRoll(snapped)) return;
       }
 
       var source = self.orientState.headingSource;
@@ -504,7 +570,8 @@
       }
 
       var targetYaw = self.base.viewYaw + o.yawOff;
-      var targetPitch = clamp(self.base.viewPitch + o.pitchOff, -Math.PI / 2, Math.PI / 2);
+      var pl = pitchClampLimits(snapped);
+      var targetPitch = clamp(self.base.viewPitch + o.pitchOff, pl.min, pl.max);
       self.displayYaw = normalizeAngle(
         self.displayYaw + clamp(
           YAW_SMOOTH * angleDelta(self.displayYaw, targetYaw),
@@ -518,8 +585,8 @@
           -PITCH_MAX_STEP,
           PITCH_MAX_STEP
         ),
-        -Math.PI / 2,
-        Math.PI / 2
+        pl.min,
+        pl.max
       );
       v.setYaw(self.displayYaw);
       v.setPitch(self.displayPitch);
