@@ -1,7 +1,7 @@
 /**
- * パノラマ用ジャイロ制御 v76
- * 15°でy/p記録 → 30°でOFF＋横補正 / 横は手動ON可 / 横→縦で自動ON
- * 詳細: vendor/gyro-STABLE-v76.txt
+ * パノラマ用ジャイロ制御 v77
+ * 意図的な横倒しのみ15°記録→30°OFF / 横は手動ON可 / 横→縦で自動ON
+ * 詳細: vendor/gyro-STABLE-v77.txt
  */
 (function(global) {
   'use strict';
@@ -18,9 +18,12 @@
   var ROLL_SNAPSHOT_DEG = 15;
   var ROLL_OFF_DEG = 30;
   var ROLL_RESET_DEG = 8;
+  var ROLL_STABLE_FRAMES = 15;
+  var ROLL_BETA_MAX = 22;
+  var ROLL_HEADING_MAX = 5;
   var PITCH_UP_BOOST_PORTRAIT = 1.32;
   var PITCH_UP_BOOST_LANDSCAPE = 1.58;
-  var BUILD = 'v76';
+  var BUILD = 'v77';
   var LANDSCAPE_RIGHT_CUR = 90;
   var LANDSCAPE_LEFT_CUR = 270;
 
@@ -194,18 +197,10 @@
     return gamma;
   }
 
-  function correctViewForLandscapeRoll(snap, landscapeDir) {
-    var yaw = snap.yaw;
-    var pitch = snap.pitch;
-    var fix = pitch * 0.55;
-    if (landscapeDir === LANDSCAPE_RIGHT_CUR) {
-      yaw = normalizeAngle(yaw - fix);
-    } else if (landscapeDir === LANDSCAPE_LEFT_CUR) {
-      yaw = normalizeAngle(yaw + fix);
-    }
+  function correctViewForLandscapeRoll(snap) {
     return {
-      yaw: yaw,
-      pitch: clamp(pitch, -Math.PI / 2, Math.PI / 2)
+      yaw: snap.yaw,
+      pitch: clamp(snap.pitch, -Math.PI / 2, Math.PI / 2)
     };
   }
 
@@ -367,6 +362,9 @@
     this._portraitRestartTimer = null;
     this._rollBusy = false;
     this._rollGuardBound = false;
+    this._rollWatchFrames = 0;
+    this._rollWatchDir = null;
+    this._rollWatchLastHeading = null;
     this._bindRollGuard();
   }
 
@@ -405,6 +403,9 @@
     this._earlyRollSnapshot = null;
     this._rollTransitionDir = null;
     this._earlyRollOff = false;
+    this._rollWatchFrames = 0;
+    this._rollWatchDir = null;
+    this._rollWatchLastHeading = null;
   };
 
   GyroControl.prototype._stopGyroOnly = function() {
