@@ -943,7 +943,8 @@
   GyroControl.isSupportedDevice = function() {
     if (!('ontouchstart' in global)) return false;
     var ua = navigator.userAgent || '';
-    if (/iPad|iPhone|iPod|Android/i.test(ua)) return true;
+    if (/iPhone|iPod/i.test(ua)) return true;
+    if (/iPad/i.test(ua)) return true;
     if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) return true;
     return false;
   };
