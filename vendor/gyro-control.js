@@ -1,6 +1,6 @@
 /**
- * パノラマ用ジャイロ制御 v79.0
- * 横: 下=gamma / 上=gamma+beta補助 / 1フレーム跳び制限
+ * パノラマ用ジャイロ制御 v79.2
+ * v79.1 / ボタン左(270°)の水平引っかかり・逆転を強化修正
  */
 (function(global) {
   'use strict';
@@ -16,7 +16,8 @@
   var LOCK_JUMP_REJECT_DEG = 8;
   var PITCH_SPIKE_LANDSCAPE = 38;
   var LANDSCAPE_PITCH_STEP_DEG = 5.5;
-  var BUILD = 'v79.0';
+  var LANDSCAPE_LEFT_HORIZ_DEG = 5;
+  var BUILD = 'v79.2';
   var LANDSCAPE_RIGHT_CUR = 90;
   var LANDSCAPE_LEFT_CUR = 270;
 
@@ -183,6 +184,7 @@
         (pitchOffDeg < 0 && state.lastPitchOffDeg >= 0);
       if (crossed) {
         state.lastPitchOffDeg = pitchOffDeg;
+        state.lastOutPitchOffDeg = pitchOffDeg;
       } else if (Math.abs(pitchOffDeg - state.lastPitchOffDeg) > PITCH_SPIKE_LANDSCAPE) {
         pitchOffDeg = state.lastPitchOffDeg;
         pitchOff = degToRad(pitchOffDeg);
@@ -207,6 +209,40 @@
     }
     state.lastOutPitchOffDeg = d;
     return degToRad(d);
+  }
+
+  function computeLandscapePitchDeg(screenAngle, pitchG, pitchB) {
+    if (screenAngle === LANDSCAPE_RIGHT_CUR) {
+      return pitchG < 0 ? pitchG : pitchG + pitchB;
+    }
+    if (pitchG < 0) {
+      return pitchG;
+    }
+    if (pitchB < 0 && pitchG < LANDSCAPE_LEFT_HORIZ_DEG + 2) {
+      return pitchG;
+    }
+    if (Math.abs(pitchG) < LANDSCAPE_LEFT_HORIZ_DEG &&
+        Math.abs(pitchB) < LANDSCAPE_LEFT_HORIZ_DEG) {
+      return 0;
+    }
+    return pitchG + pitchB;
+  }
+
+  function processLandscapeLeftPitch(pitchOffDeg, state) {
+    if (Math.abs(pitchOffDeg) < 0.5) {
+      state.lastPitchOffDeg = 0;
+      state.lastOutPitchOffDeg = 0;
+      return 0;
+    }
+    if (state.lastPitchOffDeg != null &&
+        Math.abs(pitchOffDeg) < 2 &&
+        Math.abs(state.lastPitchOffDeg) > 6) {
+      state.lastPitchOffDeg = pitchOffDeg;
+      state.lastOutPitchOffDeg = pitchOffDeg;
+    }
+    var pitchOff = degToRad(pitchOffDeg);
+    pitchOff = filterLandscapePitchSpike(pitchOff, state);
+    return applyLandscapePitchOutput(pitchOff, state);
   }
 
   function trackOrientation(normalized, state, rawEvent) {
@@ -250,12 +286,16 @@
       var b = readLandscapeBetaCentered(rawEvent);
       state.fLandscapeB = lp(state.fLandscapeB, b, SENSOR_LP);
       var deltaB = state.fLandscapeB - state.landscapeB;
-      var pitchB = screenAngle === LANDSCAPE_RIGHT_CUR ? -deltaB : deltaB;
+      var pitchB = -deltaB;
 
-      var pitchOffDeg = pitchG < 0 ? pitchG : pitchG + pitchB;
-      pitchOff = degToRad(pitchOffDeg);
-      pitchOff = filterLandscapePitchSpike(pitchOff, state);
-      pitchOff = applyLandscapePitchOutput(pitchOff, state);
+      var pitchOffDeg = computeLandscapePitchDeg(screenAngle, pitchG, pitchB);
+      if (screenAngle === LANDSCAPE_LEFT_CUR) {
+        pitchOff = processLandscapeLeftPitch(pitchOffDeg, state);
+      } else {
+        pitchOff = degToRad(pitchOffDeg);
+        pitchOff = filterLandscapePitchSpike(pitchOff, state);
+        pitchOff = applyLandscapePitchOutput(pitchOff, state);
+      }
     } else {
       state.fBeta = lp(state.fBeta, normalized.beta, SENSOR_LP);
       pitchOff = degToRad(state.initBeta - state.fBeta);
