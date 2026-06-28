@@ -1,6 +1,6 @@
 /**
- * パノラマ用ジャイロ制御 v79.14
- * Step2d: 端末を回す前の角度だけ保存 / setParametersで復元
+ * パノラマ用ジャイロ制御 v79.15
+ * Step2e: 端末の物理傾きで保存 / OFF後にviewerへ確実復元
  */
 (function(global) {
   'use strict';
@@ -20,7 +20,7 @@
   var LANDSCAPE_CROSS_REJECT_DEG = 12;
   var ROLL_SAVE_ARM_DEG = 5;
   var ROLL_SAVE_BETA_MAX = 20;
-  var BUILD = 'v79.14';
+  var BUILD = 'v79.15';
   var LANDSCAPE_RIGHT_CUR = 90;
   var LANDSCAPE_LEFT_CUR = 270;
 
@@ -180,16 +180,6 @@
     return 0;
   }
 
-  function readTiltFromPortraitDeg() {
-    var raw = normalizeAngle360(getScreenAngleDeg());
-    var to90 = Math.abs(raw - 90);
-    if (to90 > 180) to90 = 360 - to90;
-    var to270 = Math.abs(raw - 270);
-    if (to270 > 180) to270 = 360 - to270;
-    var flat = raw > 180 ? 360 - raw : raw;
-    return Math.min(to90, to270, flat);
-  }
-
   function readPortraitRollDeg(rawEvent) {
     if (!rawEvent || rawEvent.gamma == null || isNaN(rawEvent.gamma)) return 0;
     var beta = rawEvent.beta != null && !isNaN(rawEvent.beta) ? rawEvent.beta : 90;
@@ -229,6 +219,18 @@
       view.setYaw(saved.yaw);
       view.setPitch(pitch);
     }
+  }
+
+  function schedulePortraitViewRestore(getView, saved, hookFn) {
+    if (!saved) return;
+    var applyOnce = function() {
+      applySavedViewToScreen(getView, saved);
+      if (hookFn) hookFn(saved);
+    };
+    applyOnce();
+    requestAnimationFrame(applyOnce);
+    setTimeout(applyOnce, 80);
+    setTimeout(applyOnce, 250);
   }
 
   function filterLandscapePitchSpike(pitchOff, state) {
@@ -458,6 +460,7 @@
     this.userDismissed = false;
     this.savedPortraitView = null;
     this.rollSaveFrozen = false;
+    this.pendingPortraitRestore = null;
   }
 
   GyroControl.BUILD = BUILD;
@@ -492,29 +495,12 @@
   GyroControl.prototype._updatePortraitViewSave = function(snapped) {
     if (!this.orientState || isLandscapeScreen(snapped)) return;
     if (this.rollSaveFrozen) return;
-    var tilt = readTiltFromPortraitDeg();
-    if (tilt < ROLL_SAVE_ARM_DEG) {
+    var roll = this.latestEvent ? readPortraitRollDeg(this.latestEvent) : 0;
+    if (roll < ROLL_SAVE_ARM_DEG) {
       this._capturePortraitView();
     } else {
       this.rollSaveFrozen = true;
     }
-  };
-
-  GyroControl.prototype._restoreSavedPortraitView = function() {
-    applySavedViewToScreen(this.getView.bind(this), this.savedPortraitView);
-  };
-
-  GyroControl.prototype._scheduleSavedViewRestore = function(saved) {
-    if (!saved) return;
-    var getView = this.getView;
-    var applyOnce = function() {
-      applySavedViewToScreen(getView, saved);
-    };
-    applyOnce();
-    requestAnimationFrame(applyOnce);
-    requestAnimationFrame(function() {
-      requestAnimationFrame(applyOnce);
-    });
   };
 
   GyroControl.prototype._offPortraitToLandscape = function() {
@@ -523,16 +509,14 @@
     }
     var saved = this.savedPortraitView;
     this.hintText = '';
-    if (saved) {
-      this._scheduleSavedViewRestore(saved);
-    }
+    this.pendingPortraitRestore = saved;
     this.stop(false);
     if (saved) {
-      this._scheduleSavedViewRestore(saved);
-      if (this.hooks.onPortraitRestore) {
-        this.hooks.onPortraitRestore(saved);
-      }
+      var getView = this.getView;
+      var hookFn = this.hooks.onPortraitRestore || null;
+      schedulePortraitViewRestore(getView, saved, hookFn);
     }
+    this.pendingPortraitRestore = null;
   };
 
   GyroControl.prototype._checkOrientationTransition = function(snapped) {
@@ -665,6 +649,12 @@
     this.enabled = false;
     if (wasOn) {
       if (this.hooks.onStop) this.hooks.onStop();
+      if (this.pendingPortraitRestore) {
+        var saved = this.pendingPortraitRestore;
+        var getView = this.getView;
+        var hookFn = this.hooks.onPortraitRestore || null;
+        schedulePortraitViewRestore(getView, saved, hookFn);
+      }
       this._emit();
     }
   };
@@ -757,6 +747,10 @@
           self.orientState.lockedCur = snapped;
           self.orientState.justLocked = true;
           source = self.orientState.headingSource;
+          if (isPortraitScreen(snapped)) {
+            self.rollSaveFrozen = false;
+            self._capturePortraitView();
+          }
         }
         var settleNorm = normalizeSensorEvent(self.latestEvent, snapped, source);
         if (settleNorm) trackOrientation(settleNorm, self.orientState, self.latestEvent);

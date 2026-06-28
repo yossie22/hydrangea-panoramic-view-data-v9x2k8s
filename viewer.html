@@ -1128,7 +1128,7 @@ body.embed-shadow #hiResPeekOverlay { display: none !important; }
 </div>
 
 <script src="vendor/marzipano.js"></script>
-<script src="vendor/gyro-control.js?v=79.14"></script>
+<script src="vendor/gyro-control.js?v=79.15"></script>
 <script src="vendor/minimap-widget.js?v=1"></script>
 <script src="vendor/pano-black90.js?v=2"></script>
 <script>
@@ -3195,6 +3195,21 @@ var showAutoCtrl=false;
 var uiArrowsShown=false;
 var sceneGyro = null;
 
+function applyGyroPortraitViewRestore(saved) {
+  if (!saved || !currentView) return;
+  try {
+    if (typeof currentView.stopMovement === 'function') {
+      currentView.stopMovement();
+    }
+    var p = currentView.parameters();
+    currentView.setParameters({
+      yaw: saved.yaw,
+      pitch: saved.pitch,
+      fov: p.fov
+    });
+  } catch (eGyroRestore) {}
+}
+
 if (typeof GyroControl !== 'undefined' && GyroControl.isSupportedDevice() && gyroBtnEl) {
   sceneGyro = new GyroControl(function() { return currentView; });
   sceneGyro.setGetViewer(function() { return viewer; });
@@ -3214,6 +3229,12 @@ if (typeof GyroControl !== 'undefined' && GyroControl.isSupportedDevice() && gyr
         panoElement.style.touchAction = '';
         document.body.classList.remove('gyro-active');
       }
+      if (sceneGyro && sceneGyro.pendingPortraitRestore) {
+        applyGyroPortraitViewRestore(sceneGyro.pendingPortraitRestore);
+      }
+    },
+    onPortraitRestore: function(saved) {
+      applyGyroPortraitViewRestore(saved);
     },
     onTick: function() {
       try { viewer.controls().disable(); } catch (e2) {}
