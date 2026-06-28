@@ -1,6 +1,6 @@
 /**
- * パノラマ用ジャイロ制御 v79.8
- * ボタン右 … 上下の向きを反転（左 v79.7 は維持）
+ * パノラマ用ジャイロ制御 v79.9
+ * iPad/iPhone で符号を分ける / 水平付近の誤跳び防止
  */
 (function(global) {
   'use strict';
@@ -17,7 +17,8 @@
   var PITCH_SPIKE_LANDSCAPE = 38;
   var LANDSCAPE_PITCH_STEP_DEG = 5.5;
   var LANDSCAPE_LEFT_UP_BETA_DEG = 1.5;
-  var BUILD = 'v79.8';
+  var LANDSCAPE_CROSS_REJECT_DEG = 12;
+  var BUILD = 'v79.9';
   var LANDSCAPE_RIGHT_CUR = 90;
   var LANDSCAPE_LEFT_CUR = 270;
 
@@ -177,14 +178,26 @@
     return 0;
   }
 
+  function isIPadDevice() {
+    var ua = navigator.userAgent || '';
+    if (/iPad/i.test(ua)) return true;
+    return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+  }
+
   function filterLandscapePitchSpike(pitchOff, state) {
     var pitchOffDeg = radToDeg(pitchOff);
     if (state.lastPitchOffDeg != null) {
       var crossed = (pitchOffDeg > 0 && state.lastPitchOffDeg <= 0) ||
         (pitchOffDeg < 0 && state.lastPitchOffDeg >= 0);
       if (crossed) {
-        state.lastPitchOffDeg = pitchOffDeg;
-        state.lastOutPitchOffDeg = pitchOffDeg;
+        var crossStep = Math.abs(pitchOffDeg - state.lastPitchOffDeg);
+        if (crossStep > LANDSCAPE_CROSS_REJECT_DEG) {
+          pitchOffDeg = state.lastPitchOffDeg;
+          pitchOff = degToRad(pitchOffDeg);
+        } else {
+          state.lastPitchOffDeg = pitchOffDeg;
+          state.lastOutPitchOffDeg = pitchOffDeg;
+        }
       } else if (Math.abs(pitchOffDeg - state.lastPitchOffDeg) > PITCH_SPIKE_LANDSCAPE) {
         pitchOffDeg = state.lastPitchOffDeg;
         pitchOff = degToRad(pitchOffDeg);
@@ -219,6 +232,16 @@
       return pitchG;
     }
     return pitchG + pitchB;
+  }
+
+  function processLandscapeRightPitch(pitchOffDeg, state) {
+    var lastOut = state.lastOutPitchOffDeg;
+    if (lastOut != null && lastOut >= -3 && lastOut <= 8 && pitchOffDeg < -10) {
+      pitchOffDeg = lastOut > 0 ? lastOut : 0;
+    }
+    var pitchOff = degToRad(pitchOffDeg);
+    pitchOff = filterLandscapePitchSpike(pitchOff, state);
+    return applyLandscapePitchOutput(pitchOff, state);
   }
 
   function processLandscapeLeftPitch(pitchOffDeg, state) {
@@ -281,15 +304,15 @@
       var pitchB = screenAngle === LANDSCAPE_RIGHT_CUR ? -deltaB : deltaB;
 
       var pitchOffDeg = computeLandscapePitchDeg(screenAngle, pitchG, pitchB);
-      if (screenAngle === LANDSCAPE_RIGHT_CUR) {
+      if (screenAngle === LANDSCAPE_RIGHT_CUR && isIPadDevice()) {
+        pitchOffDeg = -pitchOffDeg;
+      } else if (screenAngle === LANDSCAPE_LEFT_CUR && !isIPadDevice()) {
         pitchOffDeg = -pitchOffDeg;
       }
       if (screenAngle === LANDSCAPE_LEFT_CUR) {
         pitchOff = processLandscapeLeftPitch(pitchOffDeg, state);
       } else {
-        pitchOff = degToRad(pitchOffDeg);
-        pitchOff = filterLandscapePitchSpike(pitchOff, state);
-        pitchOff = applyLandscapePitchOutput(pitchOff, state);
+        pitchOff = processLandscapeRightPitch(pitchOffDeg, state);
       }
     } else {
       state.fBeta = lp(state.fBeta, normalized.beta, SENSOR_LP);
