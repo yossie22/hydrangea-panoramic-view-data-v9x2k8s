@@ -1,6 +1,6 @@
 /**
- * パノラマ用ジャイロ制御 v79.13
- * Step2c: 回転前の角度を常時更新 / 横OFF時に確実復元
+ * パノラマ用ジャイロ制御 v79.14
+ * Step2d: 端末を回す前の角度だけ保存 / setParametersで復元
  */
 (function(global) {
   'use strict';
@@ -18,9 +18,9 @@
   var LANDSCAPE_PITCH_STEP_DEG = 5.5;
   var LANDSCAPE_LEFT_UP_BETA_DEG = 1.5;
   var LANDSCAPE_CROSS_REJECT_DEG = 12;
-  var ROLL_SAVE_DEG = 15;
+  var ROLL_SAVE_ARM_DEG = 5;
   var ROLL_SAVE_BETA_MAX = 20;
-  var BUILD = 'v79.13';
+  var BUILD = 'v79.14';
   var LANDSCAPE_RIGHT_CUR = 90;
   var LANDSCAPE_LEFT_CUR = 270;
 
@@ -203,12 +203,32 @@
       ' P' + Math.round(radToDeg(saved.pitch));
   }
 
+  function isPortraitScreen(screenAngle) {
+    var a = normalizeAngle360(screenAngle);
+    return a === 0 || a === 180;
+  }
+
   function applySavedViewToScreen(getView, saved) {
     if (!saved) return;
     var view = getView();
     if (!view) return;
-    view.setYaw(saved.yaw);
-    view.setPitch(clamp(saved.pitch, -Math.PI / 2, Math.PI / 2));
+    if (typeof view.stopMovement === 'function') {
+      try { view.stopMovement(); } catch (e) {}
+    }
+    var fov = 1.1;
+    if (typeof view.fov === 'function') {
+      fov = view.fov();
+    } else if (typeof view.parameters === 'function') {
+      var cur = view.parameters();
+      if (cur && cur.fov != null) fov = cur.fov;
+    }
+    var pitch = clamp(saved.pitch, -Math.PI / 2, Math.PI / 2);
+    if (typeof view.setParameters === 'function') {
+      view.setParameters({ yaw: saved.yaw, pitch: pitch, fov: fov });
+    } else {
+      view.setYaw(saved.yaw);
+      view.setPitch(pitch);
+    }
   }
 
   function filterLandscapePitchSpike(pitchOff, state) {
@@ -461,22 +481,20 @@
   GyroControl.prototype._capturePortraitView = function() {
     var view = this.getView();
     if (!view) return;
-    this.savedPortraitView = {
-      yaw: view.yaw(),
-      pitch: view.pitch()
-    };
+    if (typeof view.parameters === 'function') {
+      var p = view.parameters();
+      this.savedPortraitView = { yaw: p.yaw, pitch: p.pitch };
+    } else {
+      this.savedPortraitView = { yaw: view.yaw(), pitch: view.pitch() };
+    }
   };
 
-  GyroControl.prototype._updatePortraitViewSave = function() {
-    if (!this.orientState || this.orientState.lockedCur !== 0) return;
+  GyroControl.prototype._updatePortraitViewSave = function(snapped) {
+    if (!this.orientState || isLandscapeScreen(snapped)) return;
+    if (this.rollSaveFrozen) return;
     var tilt = readTiltFromPortraitDeg();
-    if (this.latestEvent) {
-      var roll = readPortraitRollDeg(this.latestEvent);
-      if (roll > tilt) tilt = roll;
-    }
-    if (tilt < ROLL_SAVE_DEG) {
+    if (tilt < ROLL_SAVE_ARM_DEG) {
       this._capturePortraitView();
-      this.rollSaveFrozen = false;
     } else {
       this.rollSaveFrozen = true;
     }
@@ -505,10 +523,15 @@
     }
     var saved = this.savedPortraitView;
     this.hintText = '';
+    if (saved) {
+      this._scheduleSavedViewRestore(saved);
+    }
     this.stop(false);
-    this._scheduleSavedViewRestore(saved);
-    if (this.hooks.onPortraitRestore && saved) {
-      this.hooks.onPortraitRestore(saved);
+    if (saved) {
+      this._scheduleSavedViewRestore(saved);
+      if (this.hooks.onPortraitRestore) {
+        this.hooks.onPortraitRestore(saved);
+      }
     }
   };
 
@@ -704,15 +727,12 @@
       }
 
       if (self.orientState.settleLeft > 0) {
-        if (!isLandscapeScreen(snapped)) {
+        if (isPortraitScreen(snapped)) {
           self._capturePortraitView();
-        } else {
-          if (self._checkOrientationTransition(snapped)) return;
+        } else if (self._checkOrientationTransition(snapped)) {
+          return;
         }
       }
-
-      if (self.visual) self.visual.apply(snapped);
-      self.orientState.snappedCur = snapped;
 
       if (self.orientState.settleLeft === 0 &&
           self.orientState.lockedCur != null &&
@@ -720,14 +740,12 @@
         if (self._checkOrientationTransition(snapped)) return;
       }
 
-      if (self.orientState.settleLeft === 0 &&
-          self.orientState.lockedCur === 0) {
-        self._updatePortraitViewSave();
-      } else if (self.orientState.settleLeft === 0 &&
-          self.orientState.lockedCur == null &&
-          !isLandscapeScreen(snapped)) {
-        self._capturePortraitView();
+      if (self.orientState.settleLeft === 0 && isPortraitScreen(snapped)) {
+        self._updatePortraitViewSave(snapped);
       }
+
+      if (self.visual) self.visual.apply(snapped);
+      self.orientState.snappedCur = snapped;
 
       var source = self.orientState.headingSource;
 
