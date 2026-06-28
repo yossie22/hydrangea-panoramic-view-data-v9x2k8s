@@ -1,6 +1,6 @@
 /**
- * パノラマ用ジャイロ制御 v79.17
- * Step2g: 横→縦の傾き判定を画面基準に修正
+ * パノラマ用ジャイロ制御 v79.18
+ * Step3: 縦↔横 OFF+復元後 1秒で自動 GYRO ON
  */
 (function(global) {
   'use strict';
@@ -20,7 +20,8 @@
   var LANDSCAPE_CROSS_REJECT_DEG = 12;
   var ROLL_SAVE_ARM_DEG = 5;
   var ROLL_SAVE_BETA_MAX = 20;
-  var BUILD = 'v79.17';
+  var ROTATION_AUTO_ON_MS = 1000;
+  var BUILD = 'v79.18';
   var LANDSCAPE_RIGHT_CUR = 90;
   var LANDSCAPE_LEFT_CUR = 270;
 
@@ -479,6 +480,8 @@
     this.portraitRollSaveFrozen = false;
     this.landscapeRollSaveFrozen = false;
     this.pendingPortraitRestore = null;
+    this.autoRotationRestart = true;
+    this.autoRotationRestartTimer = null;
   }
 
   GyroControl.BUILD = BUILD;
@@ -549,6 +552,30 @@
     }
   };
 
+  GyroControl.prototype.setAutoRotationRestart = function(on) {
+    this.autoRotationRestart = on !== false;
+  };
+
+  GyroControl.prototype._clearAutoRotationRestartTimer = function() {
+    if (this.autoRotationRestartTimer) {
+      clearTimeout(this.autoRotationRestartTimer);
+      this.autoRotationRestartTimer = null;
+    }
+  };
+
+  GyroControl.prototype._scheduleAutoRotationRestart = function() {
+    var self = this;
+    this._clearAutoRotationRestartTimer();
+    if (!this.autoRotationRestart || this.userDismissed) return;
+    this.autoRotationRestartTimer = setTimeout(function() {
+      self.autoRotationRestartTimer = null;
+      if (self.enabled || self.userDismissed) return;
+      var cur = snapScreenAngleDeg(getScreenAngleDeg(), null);
+      if (!GyroControl.isOrientationAllowed(cur)) return;
+      self.start();
+    }, ROTATION_AUTO_ON_MS);
+  };
+
   GyroControl.prototype._restoreAndOff = function(saved) {
     if (!saved) {
       saved = this._captureViewAngle();
@@ -562,6 +589,7 @@
       schedulePortraitViewRestore(getView, saved, hookFn);
     }
     this.pendingPortraitRestore = null;
+    this._scheduleAutoRotationRestart();
   };
 
   GyroControl.prototype._offPortraitToLandscape = function() {
@@ -709,7 +737,10 @@
 
   GyroControl.prototype.stop = function(fromUser) {
     var wasOn = this.enabled;
-    if (fromUser !== false) this.userDismissed = true;
+    if (fromUser !== false) {
+      this.userDismissed = true;
+      this._clearAutoRotationRestartTimer();
+    }
     this._cleanupListeners();
     this.base = null;
     this.orientState = null;
@@ -736,6 +767,7 @@
     }
     this.hintText = '';
     this.userDismissed = false;
+    this._clearAutoRotationRestartTimer();
     this.portraitRollSaveFrozen = false;
     this.landscapeRollSaveFrozen = false;
     var wasOn = this.enabled;
