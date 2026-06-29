@@ -376,6 +376,22 @@ var APP_DATA = {
       "top": 0,
       "right": 0,
       "bottom": 0
+    },
+    "portal": {
+      "label": "ポータル先",
+      "markImage": "portal.png",
+      "mapImage": "map_portal.jpg",
+      "sceneId": "4-bb001",
+      "pinName": "霊山",
+      "pinColor": "#00cc44",
+      "bounds": {
+        "topLeft": { "lat": 33.502, "lng": 131.268 },
+        "bottomRight": { "lat": 33.418, "lng": 131.392 }
+      },
+      "lat": 33.468,
+      "lng": 131.318,
+      "pinX": 51,
+      "pinY": 74
     }
   },
   "name": "Local 1024tiles",

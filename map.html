@@ -19,6 +19,99 @@ body, html { width: 100%; height: 100%; overflow: hidden; background: #222; }
 .pin-number { transform: rotate(45deg); font-size: 14px; font-weight: bold; color: white; line-height: 1; }
 .pin-label { background: rgba(255,255,255,0.95); color: #333; font-size: 13px; font-weight: bold; padding: 3px 7px; border-radius: 4px; white-space: nowrap; line-height: 1.2; text-align: center; box-shadow: 0 2px 6px rgba(0,0,0,0.4); margin-bottom: 4px; pointer-events: none; font-family: sans-serif; }
 .help-button { position: fixed; right: 14px; top: 14px; z-index: 50; background: rgba(255,226,106,0.94); color: #111; font-weight: bold; font-size: 15px; text-decoration: none; padding: 9px 14px; border-radius: 999px; box-shadow: 0 3px 12px rgba(0,0,0,0.45); font-family: sans-serif; }
+.map-portal {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 55;
+  width: 54px;
+  height: 54px;
+  transition: width 0.32s ease, height 0.32s ease;
+  cursor: pointer;
+}
+.map-portal:hover,
+.map-portal.is-open {
+  width: min(44vw, 290px);
+  height: min(44vw, 290px);
+}
+.map-portal-label {
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #ffff00;
+  font-size: 17px;
+  font-weight: bold;
+  font-family: 'Meiryo', sans-serif;
+  text-shadow: 0 0 8px rgba(0,0,0,0.95), 0 0 16px rgba(0,0,0,0.7);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.map-portal:hover .map-portal-label,
+.map-portal.is-open .map-portal-label { opacity: 1; }
+.map-portal-ring {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  position: relative;
+  border: 3px solid rgba(255, 190, 225, 0.9);
+  box-shadow: 0 0 16px rgba(255, 120, 200, 0.7), 0 0 32px rgba(255, 90, 180, 0.4), inset 0 0 10px rgba(255, 210, 240, 0.35);
+  background: radial-gradient(circle at 50% 45%, rgba(80,40,90,0.5), rgba(20,10,30,0.95));
+}
+.map-portal-mark {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 1;
+  transition: opacity 0.28s ease;
+  pointer-events: none;
+}
+.map-portal-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.28s ease;
+  pointer-events: none;
+}
+.map-portal:hover .map-portal-mark,
+.map-portal.is-open .map-portal-mark { opacity: 0; }
+.map-portal:hover .map-portal-map,
+.map-portal.is-open .map-portal-map { opacity: 1; }
+.map-portal-pin {
+  position: absolute;
+  transform: translate(-50%, -100%) scale(0.72);
+  opacity: 0;
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  pointer-events: none;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.map-portal:hover .map-portal-pin,
+.map-portal.is-open .map-portal-pin {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -100%) scale(1);
+}
+.map-portal-pin .pin-icon { width: 30px; height: 30px; }
+.map-portal-pin .pin-number { font-size: 12px; }
+.map-portal-pin .pin-label { font-size: 11px; padding: 2px 6px; margin-bottom: 3px; }
+@media (hover: none) {
+  .map-portal { width: 54px; height: 54px; }
+  .map-portal.is-open {
+    width: min(44vw, 290px);
+    height: min(44vw, 290px);
+  }
+}
 </style>
 </head>
 <body>
@@ -30,14 +123,47 @@ body, html { width: 100%; height: 100%; overflow: hidden; background: #222; }
   <div class="overlay-text desc-text" style="width:min(92%,900px);padding:8px;left:33%;top:43%;">アジサイの妖精が現れます。</div>
   </div>
 </div>
+<div class="map-portal" id="mapPortal" aria-label="ポータル先">
+  <div class="map-portal-label" id="mapPortalLabel">ポータル先</div>
+  <div class="map-portal-ring">
+    <img class="map-portal-mark" id="mapPortalMark" src="portal.png" alt="">
+    <img class="map-portal-map" id="mapPortalMap" src="map_portal.jpg" alt="ポータル先の地図">
+    <div class="map-portal-pin" id="mapPortalPin"></div>
+  </div>
+</div>
 <script>
 var MAP_BOUNDS = { topLeft: { lat: 33.52093, lng: 131.217184 }, bottomRight: { lat: 33.520168, lng: 131.218755 } };
 var MAP_INSETS = { left: 0, top: 0, right: 0, bottom: 0 };
 var MAP_PIN_OFFSET = { x: 0, y: 0 };
 var MAP_TWO_POINT = null;
+
+/* 地図右下ポータル（地図外シーンへ）— map_portal.jpg を同フォルダに置く */
+var MAP_PORTAL = {
+  label: 'ポータル先',
+  markImage: 'portal.png',
+  mapImage: 'map_portal.jpg',
+  sceneId: '4-bb001',
+  pinName: '霊山',
+  pinColor: '#00cc44',
+  bounds: {
+    topLeft: { lat: 33.502, lng: 131.268 },
+    bottomRight: { lat: 33.418, lng: 131.392 }
+  },
+  lat: 33.468,
+  lng: 131.318,
+  pinX: 51,
+  pinY: 74,
+  mapOffsetX: 0,
+  mapOffsetY: 0
+};
+
 function mercatorY(lat) { var r = lat * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }
-function gpsToPercent(lat, lng) {
-  var x, y, bounds = MAP_BOUNDS, tp = MAP_TWO_POINT;
+function gpsToPercent(lat, lng, bounds, insets, offset, twoPoint) {
+  bounds = bounds || MAP_BOUNDS;
+  insets = insets || MAP_INSETS;
+  offset = offset || MAP_PIN_OFFSET;
+  twoPoint = twoPoint == null ? MAP_TWO_POINT : twoPoint;
+  var x, y, tp = twoPoint;
   if (tp && tp.p1 && tp.p2) {
     var p1 = tp.p1, p2 = tp.p2;
     x = Math.abs(p2.lng - p1.lng) > 1e-12 ? p1.x + (lng - p1.lng) / (p2.lng - p1.lng) * (p2.x - p1.x) : p1.x;
@@ -49,10 +175,10 @@ function gpsToPercent(lat, lng) {
     x = lngSpan ? (lng - bounds.topLeft.lng) / lngSpan * 100 : 0;
     y = (yTop - yBot) ? (yTop - mercatorY(lat)) / (yTop - yBot) * 100 : 0;
   }
-  var il = MAP_INSETS.left || 0, it = MAP_INSETS.top || 0, ir = MAP_INSETS.right || 0, ib = MAP_INSETS.bottom || 0;
+  var il = insets.left || 0, it = insets.top || 0, ir = insets.right || 0, ib = insets.bottom || 0;
   x = il + x * (100 - il - ir) / 100;
   y = it + y * (100 - it - ib) / 100;
-  x += (MAP_PIN_OFFSET.x || 0); y += (MAP_PIN_OFFSET.y || 0);
+  x += (offset.x || 0); y += (offset.y || 0);
   return { x: x, y: y };
 }
 var PINS = [
@@ -101,6 +227,63 @@ function goToScene(pin) {
   window.location.href = url;
 }
 
+function goToPortalScene() {
+  if (!MAP_PORTAL || !MAP_PORTAL.sceneId) return;
+  var url = './viewer.html?id=' + encodeURIComponent(MAP_PORTAL.sceneId);
+  if (SIDE_BRANCHES.length > 0) {
+    url += '&sideBranches=' + encodeURIComponent(JSON.stringify(SIDE_BRANCHES));
+  }
+  url += '&back=./map.html';
+  window.location.href = url;
+}
+
+function getPortalPinPos() {
+  var p = MAP_PORTAL;
+  if (p.pinX != null && p.pinY != null) {
+    return {
+      x: (parseFloat(p.pinX) || 0) + (parseFloat(p.mapOffsetX) || 0),
+      y: (parseFloat(p.pinY) || 0) + (parseFloat(p.mapOffsetY) || 0)
+    };
+  }
+  return gpsToPercent(p.lat, p.lng, p.bounds, { left: 0, top: 0, right: 0, bottom: 0 }, { x: p.mapOffsetX || 0, y: p.mapOffsetY || 0 }, null);
+}
+
+function initMapPortal() {
+  if (!MAP_PORTAL || !MAP_PORTAL.sceneId) return;
+  var portalEl = document.getElementById('mapPortal');
+  if (!portalEl) return;
+  var labelEl = document.getElementById('mapPortalLabel');
+  var markEl = document.getElementById('mapPortalMark');
+  var mapEl = document.getElementById('mapPortalMap');
+  var pinEl = document.getElementById('mapPortalPin');
+  if (labelEl && MAP_PORTAL.label) labelEl.textContent = MAP_PORTAL.label;
+  if (markEl && MAP_PORTAL.markImage) markEl.src = MAP_PORTAL.markImage;
+  if (mapEl && MAP_PORTAL.mapImage) mapEl.src = MAP_PORTAL.mapImage;
+  var pos = getPortalPinPos();
+  pinEl.style.left = pos.x + '%';
+  pinEl.style.top = pos.y + '%';
+  pinEl.innerHTML = '<div class="pin-label">' + (MAP_PORTAL.pinName || '') + '</div>' +
+    '<div class="pin-icon" style="background:' + (MAP_PORTAL.pinColor || '#00cc44') + ';"><span class="pin-number">P</span></div>';
+  pinEl.addEventListener('click', function(e) {
+    e.stopPropagation();
+    goToPortalScene();
+  });
+  var touchMode = window.matchMedia && window.matchMedia('(hover: none)').matches;
+  if (touchMode) {
+    portalEl.addEventListener('click', function(e) {
+      if (e.target.closest('.map-portal-pin')) return;
+      portalEl.classList.toggle('is-open');
+      e.stopPropagation();
+    });
+    document.addEventListener('click', function() {
+      portalEl.classList.remove('is-open');
+    });
+    portalEl.addEventListener('touchstart', function(e) {
+      e.stopPropagation();
+    }, { passive: true });
+  }
+}
+
 var container = document.getElementById('mapStage');
 var spread = spreadPinPositions(PINS);
 spread.forEach(function(item, i) {
@@ -113,6 +296,7 @@ spread.forEach(function(item, i) {
   el.addEventListener('click', function() { goToScene(PINS[parseInt(this.getAttribute('data-idx'))]); });
   container.appendChild(el);
 });
+initMapPortal();
 </script>
 </body>
 </html>
