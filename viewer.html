@@ -975,7 +975,7 @@ body.embed-shadow #pano:active { cursor: grabbing; }
   pointer-events: none;
   user-select: none;
   -webkit-user-drag: none;
-  transition: opacity 1.4s ease-in-out;
+  transition: opacity 1.8s ease-in-out;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
 }
@@ -984,7 +984,7 @@ body.embed-shadow #pano:active { cursor: grabbing; }
   pointer-events: none;
   overflow: visible;
   opacity: 1;
-  transition: opacity 1.4s ease-in-out;
+  transition: opacity 1.8s ease-in-out;
 }
 .hi-res-peek-shadow-wrap {
   position: absolute;
@@ -1588,6 +1588,7 @@ var HI_RES_PEEK_VIDEO_FADE_MS = 1400;
 var HI_RES_PEEK_ZOOM_HINT_FADE_MS = 800;
 var HI_RES_PEEK_ZOOM_HINT_HOLD_MS = 4000;
 var HI_RES_PEEK_FULL_FADE_MS = 1100;
+var HI_RES_PEEK_MACRO_FADE_MS = 1800;
 var hiResPeekAutoZoomAnim = null;
 var hiResPeekVideoPlayPending = false;
 var hiResPeekOpen = false;
@@ -1895,15 +1896,25 @@ function hiResPeekMacroZoomEndBoost(cfg) {
   return 1;
 }
 
+function hiResPeekApplyZoomPan(zoom, panX, panY) {
+  var cfg = hiResPeekActiveCfgOrScene();
+  var zMin = (cfg && hiResPeekShootMode(cfg) === 'macro') ? 0.15 : 1;
+  hiResPeekViewState.zoom = Math.max(zMin, Math.min(hiResPeekZoomMax(cfg), zoom));
+  hiResPeekViewState.panX = Math.round(panX * 2) / 2;
+  hiResPeekViewState.panY = Math.round(panY * 2) / 2;
+  applyHiResPeekTransform();
+}
+
 function hiResPeekApplyFullHeightZoom(cfg) {
   var targetZoom = hiResPeekComputeAutoZoomTarget(cfg);
   var zMin = (cfg && hiResPeekShootMode(cfg) === 'macro') ? 0.15 : 1.01;
   if (!isFinite(targetZoom) || targetZoom < zMin) return;
+  hiResPeekApplyZoomPan(targetZoom, 0, 0);
   var view = document.getElementById('hiResPeekView');
-  if (!view) return;
-  var cx = hiResPeekViewState.zoomAnchorX != null ? hiResPeekViewState.zoomAnchorX : view.clientWidth / 2;
-  var cy = hiResPeekViewState.zoomAnchorY != null ? hiResPeekViewState.zoomAnchorY : view.clientHeight / 2;
-  setHiResPeekZoom(targetZoom, cx, cy, true);
+  if (view) {
+    hiResPeekViewState.zoomAnchorX = view.clientWidth / 2;
+    hiResPeekViewState.zoomAnchorY = view.clientHeight / 2;
+  }
 }
 
 function hiResPeekCaptureMacroPastePoint(cfg) {
@@ -2260,8 +2271,8 @@ function hiResPeekStartAutoZoom(cfg) {
   var z0 = hiResPeekViewState.zoom || 1;
   var view = document.getElementById('hiResPeekView');
   if (!view) return;
-  var cx = hiResPeekViewState.zoomAnchorX != null ? hiResPeekViewState.zoomAnchorX : view.clientWidth / 2;
-  var cy = hiResPeekViewState.zoomAnchorY != null ? hiResPeekViewState.zoomAnchorY : view.clientHeight / 2;
+  var panStartX = hiResPeekViewState.panX;
+  var panStartY = hiResPeekViewState.panY;
   hiResPeekApplyVrBackdropTone(livePano ? 1 : 0, cfg);
   if (baseImg) {
     baseImg.style.transition = 'none';
@@ -2279,7 +2290,7 @@ function hiResPeekStartAutoZoom(cfg) {
     var t = Math.min(1, (now - start) / duration);
     var ease = t * t * (3 - 2 * t);
     var z1 = z0 + (targetZoom - z0) * ease;
-    setHiResPeekZoom(z1, cx, cy, true);
+    hiResPeekApplyZoomPan(z1, panStartX * (1 - ease), panStartY * (1 - ease));
     hiResPeekApplyVrBackdropTone(livePano ? 1 : t, cfg);
     if (baseImg && isMacro && !livePano) {
       baseImg.style.opacity = String(hiResPeekImageFadeOpacity(t));
@@ -2288,6 +2299,8 @@ function hiResPeekStartAutoZoom(cfg) {
       hiResPeekAutoZoomAnim = requestAnimationFrame(frame);
     } else {
       hiResPeekAutoZoomAnim = null;
+      hiResPeekViewState.zoomAnchorX = view.clientWidth / 2;
+      hiResPeekViewState.zoomAnchorY = view.clientHeight / 2;
       hiResPeekApplyVrBackdropTone(1, cfg);
       if (baseImg) baseImg.style.opacity = '1';
       hiResPeekFinishZoomReveal(cfg);
@@ -2900,7 +2913,7 @@ function hiResPeekFadeInMacroImage(baseImg) {
   baseImg.style.transition = 'none';
   baseImg.style.opacity = '0';
   void baseImg.offsetWidth;
-  baseImg.style.transition = 'opacity 1.1s ease-in';
+  baseImg.style.transition = 'opacity ' + (HI_RES_PEEK_MACRO_FADE_MS / 1000) + 's ease-in';
   baseImg.style.opacity = '1';
 }
 
@@ -2968,38 +2981,57 @@ function openHiResPeekOverlay(cfg, hotspotEl) {
   baseImg.style.opacity = '0';
   var useZoom = cfg.autoZoom !== false;
   baseImg.style.transition = 'none';
-  var url = hiResPeekImageUrl(cfg.imageSrc);
   var deferVideo = !!(cfg && (cfg.videoSrc || cfg.videoSrcIos));
+  var expectedImage = String(cfg.imageSrc || '');
   var imageReadyDone = false;
   function showHiResPeekImageReady() {
-    if (imageReadyDone) return;
+    if (imageReadyDone || !hiResPeekOpen) return;
+    if (!baseImg.naturalWidth || !baseImg.naturalHeight) return;
+    var srcNow = baseImg.currentSrc || baseImg.src || '';
+    if (expectedImage && srcNow.indexOf(expectedImage) < 0) return;
     imageReadyDone = true;
     requestAnimationFrame(function() {
       requestAnimationFrame(function() {
         if (!hiResPeekOpen) return;
         fitHiResPeekImage(false);
-        if (keepLive && hiResPeekLiveFrameRect) {
-          hiResPeekApplyLivePanoFrameFit(hiResPeekLiveFrameRect, cfg, false);
-        }
-        setupHiResPeekOverlayVideo(cfg, { deferPlay: deferVideo });
-        syncHiResPeekShadowLayer(cfg);
         if (!useZoom) {
           hiResPeekApplyFullHeightZoom(cfg);
           applyHiResPeekTransform();
-          hiResPeekRevealFullScreenFade(cfg, baseImg);
-          return;
+        } else {
+          var laidOut = false;
+          if (keepLive && hiResPeekLiveFrameRect) {
+            laidOut = hiResPeekApplyLivePanoFrameFit(hiResPeekLiveFrameRect, cfg, false);
+          }
+          if (!laidOut && isMacroOpen) {
+            laidOut = hiResPeekSetupMacroPasteLayout(cfg, baseImg, false);
+          }
         }
+        setupHiResPeekOverlayVideo(cfg, { deferPlay: deferVideo });
+        syncHiResPeekShadowLayer(cfg);
         if (keepLive) {
           if (isMacroOpen) hiResPeekFadeInMacroImage(baseImg);
           else {
-            baseImg.style.transition = 'opacity 0.45s ease-out';
+            baseImg.style.transition = 'opacity ' + (HI_RES_PEEK_MACRO_FADE_MS / 1000) + 's ease-out';
             requestAnimationFrame(function() {
               if (!hiResPeekOpen) return;
               baseImg.style.opacity = '1';
             });
           }
+        } else {
+          baseImg.style.transition = 'opacity ' + (HI_RES_PEEK_MACRO_FADE_MS / 1000) + 's ease-out';
+          baseImg.style.opacity = '1';
         }
-        var zoomDelay = (keepLive && isMacroOpen) ? 1100 : (keepLive ? 100 : 200);
+        var revealDelay = (keepLive && isMacroOpen) ? (HI_RES_PEEK_MACRO_FADE_MS + 200) : 300;
+        if (!useZoom) {
+          hiResPeekApplyVrBackdropTone(1, cfg);
+          hiResPeekMacroSettleUntil = performance.now() + revealDelay + 400;
+          setTimeout(function() {
+            if (!hiResPeekOpen) return;
+            hiResPeekFinishZoomReveal(cfg);
+          }, revealDelay);
+          return;
+        }
+        var zoomDelay = (keepLive && isMacroOpen) ? (HI_RES_PEEK_MACRO_FADE_MS + 200) : (keepLive ? 100 : 200);
         if (keepLive && isMacroOpen) {
           hiResPeekMacroSettleUntil = performance.now() + zoomDelay + hiResPeekAutoZoomDurationMs(cfg) + 400;
         }
@@ -3012,12 +3044,14 @@ function openHiResPeekOverlay(cfg, hotspotEl) {
     });
   }
   baseImg.onerror = function() {
-    console.warn('⚠️ 高画質画像を読み込めません:', cfg.imageSrc);
+    if (!hiResPeekOpen) return;
+    console.warn('⚠️ 高画質画像を読み込めません:', expectedImage);
     closeHiResPeekOverlay();
   };
   baseImg.onload = showHiResPeekImageReady;
-  baseImg.src = url;
-  if (baseImg.complete && baseImg.naturalWidth) showHiResPeekImageReady();
+  try { baseImg.removeAttribute('src'); } catch (eClr) {}
+  void baseImg.offsetWidth;
+  baseImg.src = hiResPeekImageUrl(expectedImage);
   requestAnimationFrame(function() {
     overlay.classList.add('open');
     playHiResPeekBgm(cfg);

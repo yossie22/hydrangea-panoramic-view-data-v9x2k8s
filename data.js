@@ -83,7 +83,7 @@ var APP_DATA = {
     {
       "id": "1-aa002",
       "name": "aa002",
-      "tilesBase": "tiles2048",
+      "tilesBase": "tiles1024",
       "levels": [
         {
           "tileSize": 256,
@@ -97,10 +97,6 @@ var APP_DATA = {
         {
           "tileSize": 1024,
           "size": 1024
-        },
-        {
-          "tileSize": 2048,
-          "size": 2048
         }
       ],
       "faceSize": 2048,
@@ -168,7 +164,7 @@ var APP_DATA = {
     {
       "id": "2-aa003",
       "name": "aa003",
-      "tilesBase": "tiles2048",
+      "tilesBase": "tiles1024",
       "levels": [
         {
           "tileSize": 256,
@@ -182,10 +178,6 @@ var APP_DATA = {
         {
           "tileSize": 1024,
           "size": 1024
-        },
-        {
-          "tileSize": 2048,
-          "size": 2048
         }
       ],
       "faceSize": 2048,
@@ -252,7 +244,7 @@ var APP_DATA = {
     {
       "id": "4-bb001",
       "name": "bb001",
-      "tilesBase": "tiles2048",
+      "tilesBase": "tiles1024",
       "levels": [
         {
           "tileSize": 256,
@@ -266,10 +258,6 @@ var APP_DATA = {
         {
           "tileSize": 1024,
           "size": 1024
-        },
-        {
-          "tileSize": 2048,
-          "size": 2048
         }
       ],
       "faceSize": 2048,
@@ -419,6 +407,6 @@ var APP_DATA = {
   },
   "viewConfig": {
     "defaultFovDeg": 68,
-    "tilesBase": "tiles2048"
+    "tilesBase": "tiles1024"
   }
 };
