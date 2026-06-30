@@ -18,6 +18,16 @@
       defaultBody: '',
       markType: 'pin'
     },
+    mapPortal: {
+      id: 'mapPortal',
+      order: 15,
+      feature: 'hasMapPortal',
+      defaultTitle: '地図右下の丸いマーク（ポータル）',
+      defaultBody: '地図に載っていない別の場所へ行ける入口です。タップで丸が開き、中のピンを押すとその場所のVRへ移動できます。丸を長押し（約0.5秒）すると、広いポータル地図が開きます。',
+      markType: 'image',
+      imageSrc: '../portal.png',
+      blink: false
+    },
     lookAround: {
       id: 'lookAround',
       order: 20,
@@ -25,6 +35,15 @@
       defaultTitle: '画面の操作方法',
       defaultBody: 'マウスや指の操作で画面を回して広く見渡せます。',
       markType: 'look'
+    },
+    pinchZoom: {
+      id: 'pinchZoom',
+      order: 22,
+      feature: 'hasHiResZoom',
+      defaultTitle: 'ピンチで拡大（高画質）',
+      defaultBody: 'スマートフォンでは2本指でピンチすると、より拡大して細かいところまで見られます。パソコンではマウスホイールでも拡大できます。',
+      markType: 'look',
+      markIcon: '🔍'
     },
     routeArrows: {
       id: 'routeArrows',
@@ -72,6 +91,16 @@
       defaultBody: '360度画面の右上に青い「GYRO」があります。押して緑色になったら、端末を傾けるとその方向を見られます。※向きを変えたときは一度OFFにして、好きな向きのまま再度ONしてください。初めてのときは「モーション」の許可を選んでください。',
       defaultBodyPc: 'このVRはスマートフォン・タブレットでもご覧いただけます。360度画面を開くと右上に「GYRO」が出ます。端末を傾けて、いろいろな方向を見てみてください。',
       markType: 'gyro'
+    },
+    vrPortal: {
+      id: 'vrPortal',
+      order: 33,
+      feature: 'hasVrPortal',
+      defaultTitle: '空中に浮かぶポータル',
+      defaultBody: 'パノラマの中に丸い入り口が見えたら、その場所をタップすると別の景色に移動できます。気になるときは触ってみてください。',
+      markType: 'image',
+      imageSrc: '../portal.png',
+      blink: false
     },
     sideBranch: {
       id: 'sideBranch',
@@ -129,11 +158,23 @@
     var hasHiResPeek = false;
     var hasHiResPeekVideo = false;
     var hasGuideVideo = false;
+    var hasHiResZoom = false;
+    var hasVrPortal = false;
     var magnifierColor = 'pink';
+
+    if (appData && appData.viewConfig && appData.viewConfig.tilesBase === 'tiles2048') {
+      hasHiResZoom = true;
+    }
 
     scenes.forEach(function(sd) {
       if (sd && sd.position != null && sd.position !== '') {
         positions[String(sd.position)] = true;
+      }
+      if (sd && sd.tilesBase === 'tiles2048') hasHiResZoom = true;
+      if (sd && Array.isArray(sd.levels)) {
+        sd.levels.forEach(function(lv) {
+          if (lv && Number(lv.size) >= 2048) hasHiResZoom = true;
+        });
       }
       if (sd && sd.hiResPeek) {
         hasHiResPeek = true;
@@ -145,7 +186,14 @@
           if (vh && (vh.src || vh.srcIos || vh.srcHevc)) hasGuideVideo = true;
         });
       }
+      if (sd && Array.isArray(sd.imageHotspots)) {
+        sd.imageHotspots.forEach(function(ih) {
+          if (ih && ih.targetScene) hasVrPortal = true;
+        });
+      }
     });
+
+    var hasMapPortal = !!(appData && appData.mapConfig && appData.mapConfig.portal && appData.mapConfig.portal.sceneId);
 
     var positionCount = Object.keys(positions).length;
     var hasRoute = positionCount > 1;
@@ -170,6 +218,9 @@
       hasHiResPeek: hasHiResPeek,
       hasHiResPeekVideo: hasHiResPeekVideo,
       hasGuideVideo: hasGuideVideo,
+      hasMapPortal: hasMapPortal,
+      hasHiResZoom: hasHiResZoom,
+      hasVrPortal: hasVrPortal,
       magnifierColor: magnifierColor,
       hasGyroHelp: isGyroHelpTarget()
     };

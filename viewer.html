@@ -1394,10 +1394,44 @@ function normalizeSideBranchEntry(entry) {
   };
 }
 
+function sceneDeclaredMaxLevel(sd) {
+  if (!sd || !sd.levels || !sd.levels.length) return 0;
+  return sd.levels.reduce(function(m, l) { return Math.max(m, l.size || 0); }, 0);
+}
+
+/** 全シーン2048なら tiles1024 を見ない。混在作品はシーンごとの tilesBase を使う */
+function resolveTourTilesDefaults(appData) {
+  var scenes = (appData && appData.scenes) || [];
+  if (!scenes.length) return;
+  var tourBase = appData.viewConfig && appData.viewConfig.tilesBase;
+  if (tourBase) window.TILES_BASE = tourBase;
+
+  function effectiveBase(s) {
+    if (s.tilesBase) return s.tilesBase;
+    if (tourBase) return tourBase;
+    return sceneDeclaredMaxLevel(s) >= 2048 ? 'tiles2048' : (window.TILES_BASE || 'tiles1024');
+  }
+
+  var bases = scenes.map(effectiveBase);
+  var all2048 = bases.every(function(b) { return b === 'tiles2048'; });
+  if (all2048) {
+    window.TILES_BASE = 'tiles2048';
+    scenes.forEach(function(s) {
+      if (!s.tilesBase) s.tilesBase = 'tiles2048';
+    });
+    console.log('✅ 全シーン2048 → tiles2048 のみ使用（tiles1024 は参照しません）');
+    return;
+  }
+  scenes.forEach(function(s) {
+    if (!s.tilesBase) s.tilesBase = effectiveBase(s);
+  });
+}
+
 function startViewer() {
 'use strict';
 var Marzipano = window.Marzipano;
 var data = window.APP_DATA;
+resolveTourTilesDefaults(data);
 
 function sceneIdParts(id) {
   var match = String(id || '').match(/-([a-zA-Z]+)(\d+)$/);
@@ -1483,6 +1517,8 @@ function sceneTilesBase(sd) {
 function sceneMaxTileSize(sd) {
   var base = sceneTilesBase(sd);
   if (base === 'tiles2048' || (sd && sd.maxTileSize === 2048)) return 2048;
+  if (base === 'tiles1024') return 1024;
+  if (sceneDeclaredMaxLevel(sd) >= 2048) return 2048;
   return 1024;
 }
 var LEGACY_DEFAULT_FOV_RAD = 1.1479251634083179;
