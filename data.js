@@ -233,7 +233,7 @@ var APP_DATA = {
         "videoWidth": 24.5,
         "videoMatte": "lighten",
         "videoLoop": false,
-        "peekBgm": "Produce.mp3",
+        "peekBgm": "2-aa003a.mp3",
         "peekBgmLoop": false,
         "pasteScaleBoost": 2,
         "autoZoomMs": 10000,
@@ -308,7 +308,9 @@ var APP_DATA = {
           "magnifierColor": "gold",
           "autoZoom": false,
           "autoZoomMs": 8000,
-          "autoZoomFit": "height"
+          "autoZoomFit": "height",
+          "peekBgm": "4-bb001a.mp3",
+          "peekBgmLoop": false
         },
         {
           "imageSrc": "bb001-2eos.png",
@@ -327,7 +329,9 @@ var APP_DATA = {
           "autoZoomFit": "height",
           "frameWidth": 80,
           "frameHeight": 63,
-          "autoZoomMs": 5000
+          "autoZoomMs": 5000,
+          "peekBgm": "4-bb001a.mp3",
+          "peekBgmLoop": false
         }
       ],
       "imageHotspots": [
@@ -399,6 +403,9 @@ var APP_DATA = {
     }
   },
   "name": "Local 1024tiles",
+  "courseBgm": {
+    "aa": "aa.mp3"
+  },
   "panoramaBlack90": {
     "enabled": false,
     "faces": [

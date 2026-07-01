@@ -8940,7 +8940,7 @@ function normalizeBgmItem(raw, defaultLoop, extra) {
 
 var sceneBgmResolveToken = 0;
 
-/** シーンの bgm / APP_DATA.sceneBgm / APP_DATA.courseBgm（data.js 明示指定） */
+/** シーンの bgm / APP_DATA.sceneBgm（data.js 明示指定） */
 function getExplicitBgmItems(sceneData) {
   if (!sceneData) return null;
   var items = [];
@@ -8961,6 +8961,11 @@ function getExplicitBgmItems(sceneData) {
   }
   items = items.filter(function(it) { return it && it.file; });
   if (items.length) return items;
+  return null;
+}
+
+function getCourseBgmItems(sceneData) {
+  if (!sceneData) return null;
   var cb = data.courseBgm || (window.APP_DATA && window.APP_DATA.courseBgm);
   if (cb && sceneData.course && cb[sceneData.course]) {
     var normalizedCourseItem = normalizeBgmItem(cb[sceneData.course], false, { fromCourse: true });
@@ -9003,7 +9008,11 @@ function playSceneBGM(sceneId) {
   }
 
   resolveAutoSceneBgmItems(sceneObj.data).then(function(autoItems) {
-    startItems(autoItems);
+    if (autoItems && autoItems.length) {
+      startItems(autoItems);
+      return;
+    }
+    startItems(getCourseBgmItems(sceneObj.data));
   });
 }
 
