@@ -58,6 +58,18 @@ var APP_DATA = {
       "lat": 33.520345,
       "lng": 131.21794,
       "heading": 90,
+      "spatialAudio": {
+        "sources": [
+          {
+            "file": "0-aa001.mp3",
+            "label": "ナレーション",
+            "yawDeg": 0,
+            "pitchDeg": 0,
+            "minVolume": 0.3,
+            "falloffDeg": 90
+          }
+        ]
+      },
       "imageHotspots": [
         {
           "sceneStartId": "0-aa001",
@@ -159,7 +171,19 @@ var APP_DATA = {
           "footShadow": false,
           "footShadowConfig": {}
         }
-      ]
+      ],
+      "spatialAudio": {
+        "sources": [
+          {
+            "file": "1-aa002.mp3",
+            "label": "音源",
+            "yawDeg": 0,
+            "pitchDeg": 0,
+            "minVolume": 0.3,
+            "falloffDeg": 65
+          }
+        ]
+      }
     },
     {
       "id": "2-aa003",
@@ -239,6 +263,18 @@ var APP_DATA = {
         "autoZoomMs": 10000,
         "autoZoomFit": "height",
         "autoZoomSpeed": 1
+      },
+      "spatialAudio": {
+        "sources": [
+          {
+            "file": "2-aa003.mp3",
+            "label": "音源",
+            "yawDeg": 0,
+            "pitchDeg": 0,
+            "minVolume": 0.3,
+            "falloffDeg": 65
+          }
+        ]
       }
     },
     {
@@ -403,6 +439,11 @@ var APP_DATA = {
     }
   },
   "name": "Local 1024tiles",
+  "bgmDucking": {
+    "enabled": true,
+    "duckVolume": 0.18,
+    "fadeMs": 800
+  },
   "courseBgm": {
     "aa": {
       "file": "aa.mp3",
